@@ -1,0 +1,58 @@
+name: Bug report
+description: Report a reproducible FIFA 14 Local FUT problem
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not upload EA game executables/DLLs, account credentials, private keys, or other sensitive files.
+  - type: input
+    id: version
+    attributes:
+      label: Build version
+      placeholder: v2.41.1-beta2.25.9
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: Windows 10 22H2 / Windows 11 24H2
+    validations:
+      required: true
+  - type: dropdown
+    id: stage
+    attributes:
+      label: Where does it fail?
+      options:
+        - Prerequisites / setup
+        - Local server startup
+        - Entering FUT
+        - Store / packs
+        - Transfer market
+        - Squad / consumables
+        - Match / post-match
+        - Seasons / tournaments
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: Tell us exactly what you clicked/ran and what happened.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: error
+    attributes:
+      label: Error / diagnostics
+      description: Paste the relevant error text or sanitized diagnostic output.
+      render: shell

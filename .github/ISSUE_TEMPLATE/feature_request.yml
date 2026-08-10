@@ -1,0 +1,21 @@
+name: Feature request
+description: Suggest an improvement to FIFA 14 Local FUT
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: request
+    attributes:
+      label: What would you like added or changed?
+    validations:
+      required: true
+  - type: textarea
+    id: reason
+    attributes:
+      label: Why would this help?
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional details

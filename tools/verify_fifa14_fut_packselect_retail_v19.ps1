@@ -1,0 +1,27 @@
+param([string]$GameRoot = "")
+$ErrorActionPreference = "Stop"
+$toolsDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$projectDir = Split-Path -Parent $toolsDir
+if ([string]::IsNullOrWhiteSpace($GameRoot)) { $GameRoot = $projectDir }
+$GameRoot = [IO.Path]::GetFullPath($GameRoot)
+$resolver = Join-Path $toolsDir "resolve_fifa14_python.ps1"
+$recovery = Join-Path $toolsDir "patch_fifa14_fut_packselect_force_dock_ready_v18.py"
+. $resolver
+$runtime = Resolve-FifaPython -ProjectDir $projectDir
+$stateDir = Join-Path $projectDir "artifacts\fut-packselect-retail-recovery-v19"
+$temp = Join-Path $env:TEMP ("fifa14-v19-retail-inspect-{0}.json" -f [Guid]::NewGuid().ToString("N"))
+try {
+    $args = @($runtime.Prefix) + @($recovery, "--game-root", $GameRoot, "--state-dir", $stateDir, "--inspect")
+    & $runtime.FilePath @args | Set-Content -LiteralPath $temp -Encoding UTF8
+    if ($LASTEXITCODE -ne 0) { throw "Retail futPackSelect inspection failed." }
+    $result = Get-Content -LiteralPath $temp -Raw | ConvertFrom-Json
+    if ($result.install.status -ne "retail-original") {
+        throw "futPackSelect is not exact retail. Current status: $($result.install.status)"
+    }
+    if ($result.install.apt_sha256 -ne "2dc0096194db202875642930a73cb8098c83376853583f3b115547fdc0d3150d") {
+        throw "Retail APT hash mismatch: $($result.install.apt_sha256)"
+    }
+    Write-Host "Exact retail futPackSelect verified: $($result.install.apt_sha256)"
+} finally {
+    Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
+}

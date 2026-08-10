@@ -1,0 +1,2 @@
+cryptography>=42,<47
+frida>=17,<18

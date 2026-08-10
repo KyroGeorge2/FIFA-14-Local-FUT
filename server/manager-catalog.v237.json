@@ -1,0 +1,77 @@
+{
+  "schema": "fifa14-v237-manager-reference",
+  "note": "Manager metadata is historically grounded, but resource IDs are not verified against this PC build, so live manager item emission is intentionally disabled.",
+  "liveEmissionEnabled": false,
+  "managers": [
+    {
+      "name": "Joachim Löw",
+      "quality": "gold",
+      "rare": true,
+      "rating": 88,
+      "contractBoost": 3
+    },
+    {
+      "name": "Manuel Pellegrini",
+      "quality": "gold",
+      "rare": true,
+      "rating": 87,
+      "contractBoost": 3
+    },
+    {
+      "name": "Arsène Wenger",
+      "quality": "gold",
+      "rare": true,
+      "rating": 84,
+      "contractBoost": 3
+    },
+    {
+      "name": "Alan Pardew",
+      "quality": "gold",
+      "rare": true,
+      "rating": 81,
+      "contractBoost": 3
+    },
+    {
+      "name": "Michael Laudrup",
+      "quality": "gold",
+      "rare": false,
+      "rating": 80,
+      "contractBoost": 3
+    },
+    {
+      "name": "Sam Allardyce",
+      "quality": "gold",
+      "rare": false,
+      "rating": 78,
+      "contractBoost": 1
+    },
+    {
+      "name": "Steve Bruce",
+      "quality": "gold",
+      "rare": false,
+      "rating": 75,
+      "contractBoost": 1
+    },
+    {
+      "name": "Ian Holloway",
+      "quality": "silver",
+      "rare": true,
+      "rating": 74,
+      "contractBoost": 2
+    },
+    {
+      "name": "Jorge Almiron",
+      "quality": "silver",
+      "rare": true,
+      "rating": 72,
+      "contractBoost": 2
+    },
+    {
+      "name": "Brian Deane",
+      "quality": "bronze",
+      "rare": true,
+      "rating": 64,
+      "contractBoost": 1
+    }
+  ]
+}

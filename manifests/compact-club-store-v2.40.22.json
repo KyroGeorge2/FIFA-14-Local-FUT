@@ -1,0 +1,18 @@
+{
+  "version": "2.40.22",
+  "runtimeBaseline": "2.40.19",
+  "release": "v2.40.22",
+  "feature": "expandable-legend-client-db-and-retail-player-subtypes",
+  "changes": [
+    "hard-force C:\\Program Files\\EA Games\\FIFA 14\\Game with no directory prompt",
+    "expand a full cards_ng_db players table instead of requiring spare rows",
+    "rewrite or relocate resized ViV4/chunkzip cards DB records and update BH offsets/sizes",
+    "grow playernames rows/string tail when safe capacity is required",
+    "verify all 42 Legend IDs on disk before direct My Club seeding",
+    "emit historical FUT positional cardsubtypeid bands: GK=0 DEF=1 MID=2 ATT=3",
+    "preserve stable v2.40.19+ pack, duplicate, Send to Club and quick-sell behavior",
+    "include v2.40.22 Legend/client-DB reports in every trace ZIP"
+  ],
+  "notes": "Guarded beta: archives are backed up before writes; any incomplete 42/42 Legend verification restores the originals and keeps Legends disabled.",
+  "description": "Expandable FIFA 14 PC FUT cards database injection for 42 Legends plus corrected player subtype mapping."
+}

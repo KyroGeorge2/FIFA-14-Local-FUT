@@ -1,0 +1,43 @@
+name: Repository checks
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Compile Python sources
+        shell: pwsh
+        run: python -m compileall -q server tools
+
+      - name: Validate JSON files
+        shell: pwsh
+        run: |
+          @'
+          import json
+          from pathlib import Path
+
+          failures = []
+          for path in Path('.').rglob('*.json'):
+              if any(part in {'.git', '.venv', 'artifacts', 'dist'} for part in path.parts):
+                  continue
+              try:
+                  with path.open('r', encoding='utf-8-sig') as handle:
+                      json.load(handle)
+              except Exception as exc:
+                  failures.append(f"{path}: {exc}")
+
+          if failures:
+              raise SystemExit("Invalid JSON:\n" + "\n".join(failures))
+          print("JSON validation passed")
+          '@ | python -
