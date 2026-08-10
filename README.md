@@ -28,9 +28,19 @@ This project expects an existing legitimate FIFA 14 PC installation and does not
 
 ## Repository / development
 
-If you cloned the source repository rather than downloading a release, see [GITHUB_SETUP.md](GITHUB_SETUP.md), [CONTRIBUTING.md](CONTRIBUTING.md), and [RELEASING.md](RELEASING.md).
+This repository is already prepared for GitHub with `.gitignore`, `.gitattributes`, issue templates, repository checks, and release-packaging scripts.
 
-Generated runtime state, certificates, diagnostics, virtual environments, and release ZIPs are excluded by `.gitignore`.
+To publish a fresh clone/folder:
+
+1. Create an empty GitHub repository.
+2. Run `SETUP_GITHUB_REPO.cmd`.
+3. Run `PUSH_TO_GITHUB.cmd` and paste the repository URL.
+
+For future releases, run `PACKAGE_RELEASE.cmd`; the clean runtime ZIP is written to `dist\` and can be attached to a GitHub Release. Keep version history/changelogs in GitHub Releases rather than adding separate Markdown files to the repository root.
+
+Generated runtime state, certificates, diagnostics, virtual environments, and release ZIPs are excluded by `.gitignore`. Do not commit FIFA 14 executables, EA DLLs, game archives, account credentials, private keys, or files copied from a user's game installation.
+
+For contributions, keep changes focused and include the exact gameplay/runtime test performed where relevant. For security-sensitive reports, do not post credentials, private keys, access tokens, or personal data in a public issue.
 
 ## License
 
