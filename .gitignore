@@ -9,6 +9,7 @@ __pycache__/
 .ruff_cache/
 
 # Local configuration / secrets
+config.local.psd1
 .env
 .env.*
 !.env.example

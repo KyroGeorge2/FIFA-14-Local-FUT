@@ -1,4 +1,4 @@
-﻿$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 $projectDir = Split-Path -Parent $PSScriptRoot
 Set-Location $projectDir
@@ -10,7 +10,7 @@ function Test-IsAdministrator {
 }
 
 if (-not (Test-IsAdministrator)) {
-    Write-Host "Administrator rights are required to patch FIFA archives under Program Files. Requesting elevation..."
+    Write-Host "Administrator rights are required for the local hosts/certificate setup and FIFA archive patching. Requesting elevation..."
     Start-Process -FilePath "powershell.exe" -Verb RunAs -ArgumentList @(
         "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ('"' + $PSCommandPath + '"')
     ) | Out-Null
@@ -18,20 +18,16 @@ if (-not (Test-IsAdministrator)) {
 }
 
 Write-Host "============================================================"
-Write-Host " FIFA 14 LOCAL FUT v2.41.1 BETA 2.25.9 FRIEND BUILD"
+Write-Host " FIFA 14 LOCAL FUT v2.41.1 BETA 2.25.9 ISSUE HOTFIX"
 Write-Host "============================================================"
 Write-Host " BETA 2.25.9 FRIEND: clean local profile, starter bronze club, no bundled user save"
 Write-Host ""
 
-$hardCodedGameRoot = "C:\Program Files\EA Games\FIFA 14\Game"
-$hardCodedGameExe = Join-Path $hardCodedGameRoot "fifa14.exe"
-if (-not (Test-Path -LiteralPath $hardCodedGameRoot -PathType Container)) {
-    throw "Hard-coded FIFA 14 game directory not found: $hardCodedGameRoot"
-}
-if (-not (Test-Path -LiteralPath $hardCodedGameExe -PathType Leaf)) {
-    throw "Hard-coded FIFA 14 executable not found: $hardCodedGameExe"
-}
-Write-Host ("Hard-coded FIFA 14 Game directory: " + $hardCodedGameRoot) -ForegroundColor Green
+. (Join-Path $PSScriptRoot "common.ps1")
+$resolvedGame = Resolve-Fifa14Paths -PromptIfMissing -PersistDetected
+$GameRoot = $resolvedGame.GameRoot
+$GameExe = $resolvedGame.GameExe
+Write-Host ("FIFA 14 Game directory: " + $GameRoot + " [" + $resolvedGame.Source + "]") -ForegroundColor Green
 
 # Friend-PC prerequisite preflight. This is cheap when everything is already
 # installed; when Python or Git/OpenSSL is missing it installs only what is
@@ -78,5 +74,5 @@ if (-not (Test-Path -LiteralPath $venvPython)) {
     }
 }
 
-& (Join-Path $PSScriptRoot "run_fifa14_local_beta.ps1")
+& (Join-Path $PSScriptRoot "run_fifa14_local_beta.ps1") -GameRoot $GameRoot -GameExe $GameExe
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

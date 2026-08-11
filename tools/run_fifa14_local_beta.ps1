@@ -354,9 +354,9 @@ if (-not $SkipStaticExtract) {
     # archive. Re-check here because dependency/diagnostic preparation can take
     # long enough for an old game process to be relaunched manually.
     Stop-Fifa14ForOnDiskPatch
-    & $retailRestore -GameRoot $GameRoot
-    & $retailVerify -GameRoot $GameRoot
-    Write-Host "Restored and verified exact retail futPackSelect."
+    & $retailRestore -GameRoot $GameRoot -AllowUnknown
+    & $retailVerify -GameRoot $GameRoot -AllowUnknown
+    Write-Host "futPackSelect recovery/compatibility check completed."
 }
 if (-not $SkipBranchApply) {
     & $branchApply -Mode $Mode -GameRoot $GameRoot -DualArchive:$DualArchive

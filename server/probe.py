@@ -2229,6 +2229,38 @@ class HttpProbe(BaseHTTPRequestHandler):
     def _is_store_pack_descriptions_path(path_without_query: str) -> bool:
         return "packs/loc/storepackdescriptions." in path_without_query.lower()
 
+    @staticmethod
+    def _is_fut_localization_path(path_without_query: str) -> bool:
+        lowered = path_without_query.lower()
+        return "/fut/loc/" in lowered and lowered.endswith(".xml")
+
+    @classmethod
+    def _local_ui_locstrings_payload(cls) -> bytes:
+        strings: dict[str, str] = {}
+        try:
+            from local_identity import PACK_CATALOG_DOCUMENT
+            for entry in PACK_CATALOG_DOCUMENT.get("packs", []):
+                pack_type = int(entry.get("packType", 0))
+                pack_id = int(entry.get("packId", pack_type))
+                name = str(entry.get("name", f"Local Pack {pack_type}"))
+                description = str(entry.get("description", name))
+                strings[f"LOCAL_PACK_NAME_{pack_type}"] = name
+                strings[f"LOCAL_PACK_DESC_{pack_type}"] = description
+                strings[f"FUT_STORE_PACK_{pack_id}_DESC"] = description
+        except Exception:
+            pass
+        try:
+            from beta_identity import OFFLINE_TOURNAMENTS
+            for entry in OFFLINE_TOURNAMENTS:
+                tournament_id = int(entry.get("tournamentId", 0) or 0)
+                if tournament_id > 0:
+                    strings[f"LOCAL_TOURNAMENT_NAME_{tournament_id}"] = str(
+                        entry.get("name") or f"Local Cup {tournament_id}"
+                    )
+        except Exception:
+            pass
+        return cls._locstrings_payload(strings, target="fifa14-local-ui-locstrings")
+
     @classmethod
     def _store_pack_descriptions_payload(cls) -> bytes:
         # FIFA 14's localization loader consumes the same <locstring> message
@@ -2252,6 +2284,16 @@ class HttpProbe(BaseHTTPRequestHandler):
             # token family. Keep the local aliases too for backward-compatible
             # diagnostics, but make the native key available to the frontend.
             strings[f"FUT_STORE_PACK_{pack_id}_DESC"] = description
+        try:
+            from beta_identity import OFFLINE_TOURNAMENTS
+            for entry in OFFLINE_TOURNAMENTS:
+                tournament_id = int(entry.get("tournamentId", 0) or 0)
+                if tournament_id > 0:
+                    strings[f"LOCAL_TOURNAMENT_NAME_{tournament_id}"] = str(
+                        entry.get("name") or f"Local Cup {tournament_id}"
+                    )
+        except Exception:
+            pass
         return cls._locstrings_payload(strings, target="storepackdescriptions")
 
     @staticmethod
@@ -2545,6 +2587,22 @@ class HttpProbe(BaseHTTPRequestHandler):
                 "fut-store-pack-descriptions-response",
                 listener=probe_name, method=self.command, path=self.path,
                 status=200, bytes=len(payload),
+            )
+        elif (
+            probe_name in {"fut-http", "dynamic-http"}
+            and self._is_fut_localization_path(path_without_query)
+        ):
+            # Retired EA FUT localization URLs must not fall through to the
+            # generic empty <MESSAGES> response. Serve our local UI tokens for
+            # any locale filename (eng_us, eng_gb, etc.).
+            payload = self._local_ui_locstrings_payload()
+            self.send_response(200)
+            self.send_header("content-type", "application/xml; charset=utf-8")
+            self.send_header("cache-control", "no-store")
+            self.send_header("connection", "close")
+            emit(
+                "fut-local-ui-locstrings-response", listener=probe_name,
+                method=self.command, path=self.path, status=200, bytes=len(payload),
             )
         elif (
             probe_name in {"fut-http", "dynamic-http"}

@@ -1,0 +1,5 @@
+@{
+    # Folder containing fifa14.exe
+    GameRoot = 'D:\Games\FIFA 14\Game'
+    GameExe  = 'D:\Games\FIFA 14\Game\fifa14.exe'
+}

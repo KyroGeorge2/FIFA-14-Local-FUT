@@ -67,7 +67,7 @@ def main() -> int:
     require(probe, (
         "icebreakerpacklist.v27.json", "ICEBREAKER_ENGLISH_CAPTAIN_SELECTED",
         "provision_pack_play_club", "local-store-pack-purchase",
-        "store-pack-types-v237", "packs/loc/storepackdescriptions.",
+        "store-pack-types-v237", "packs/loc/storepackdescriptions.", "_local_ui_locstrings_payload", "_is_fut_localization_path",
         '"/ut/game/fifa14/managerquest"', "save_squad", "trusted_device",
         "save_client_data", "update_club_profile", "club_stats",
         'path_without_query == "/ut/game/fifa14/hub"', "fut-hub-data-native",
@@ -96,6 +96,7 @@ def main() -> int:
         "apply_consumable", "consumable_effects", "packEligible", "GK Training",
         "specialChancePerPack", "secondSpecialChanceGivenFirst", "maxSpecialsPerPack", "legendChancePerPack", "LOCAL_PACK_NAME_", "FUT_STORE_PACK_",
         "market_search", "market_bid", "list_for_sale", "trade_pile", "withdraw_listing",
+        "pile='trade'", 'trade_state="inactive"', "unlisted",
     ))
     require(prep, (
         "find_previous_hub_database", 'destination.parent.glob("local-fut-v*.sqlite3")',
@@ -107,15 +108,15 @@ def main() -> int:
     require(pack_v18, ("patch_fifa14_fut_packselect_safe_relay_v17.py", "--restore", "retail-original"))
     require(pack_v17, ("patch_fifa14_fut_packselect_no_cinematic_v16.py", "RETAIL_APT_SHA256", "recover_retail_decoded"))
     require(pack_v16, ("RETAIL_APT_SHA256", "RETAIL_DECODED_SHA256", "retail-original"))
-    require(setup, ("FIFA 14 FUT hub + store", "RUN_FIFA14_HUB_STORE.cmd", r"C:\Program Files\EA Games\FIFA 14\Game"))
+    require(setup, ("Resolve-Fifa14Paths", "Save-Fifa14Config", "RUN_FIFA14_LOCAL_BETA.cmd"))
     setup_text = setup.read_text(encoding="utf-8", errors="replace")
-    if "Read-Host" in setup_text:
-        raise RuntimeError("setup.ps1 must not contain an interactive FIFA path prompt")
+    if "-PromptIfMissing" not in setup_text or "config.local.psd1" not in (ROOT / "tools" / "common.ps1").read_text(encoding="utf-8", errors="replace"):
+        raise RuntimeError("configurable FIFA 14 path setup is incomplete")
     launcher_text = (ROOT / "tools" / "launch_fifa14_hub_store.ps1").read_text(encoding="utf-8", errors="replace")
-    if "setup.ps1" in launcher_text:
-        raise RuntimeError("normal launcher must not invoke setup.ps1 for FIFA path discovery")
-    if r'C:\Program Files\EA Games\FIFA 14\Game' not in launcher_text:
-        raise RuntimeError("normal launcher is not hard-coded to the user's FIFA 14 Game directory")
+    if "Resolve-Fifa14Paths -PromptIfMissing -PersistDetected" not in launcher_text:
+        raise RuntimeError("normal launcher does not auto-detect/persist the FIFA 14 Game directory")
+    if '-GameRoot $GameRoot -GameExe $GameExe' not in launcher_text:
+        raise RuntimeError("normal launcher does not pass the resolved FIFA path into the beta runner")
     if 'Get-Process -Name "fifa14"' not in launcher_text or 'Stop-Process -Force' not in launcher_text:
         raise RuntimeError("normal launcher does not close stale fifa14.exe before archive/database patching")
     require(run_script, ("dlc\\dlc_powdll\\dlc\\powdll\\powdllzf.dll", 'Join-Path $GameRoot "powdllzf.dll"', "Resolved powdllzf.dll", "expectedPowSha256",
@@ -193,7 +194,10 @@ def main() -> int:
         "fut-competition-ui-static-extract.zip", "fifa14-match-assets-v2411-beta222.json", "SecurityStartupDelaySeconds = 15",
     ))
     common_script = ROOT / "tools" / "common.ps1"
-    require(common_script, (r"C:\Program Files\EA Games\FIFA 14\Game", "hard-patched for this installation"))
+    require(common_script, ("Get-LocalConfig", "Save-Fifa14Config", "FIFA14_GAME_ROOT", "Get-Fifa14AutoDetectCandidates", "PromptIfMissing", "PersistDetected"))
+    require(ROOT / "config.local.psd1.example", ("GameRoot", "GameExe"))
+    if "config.local.psd1" not in (ROOT / ".gitignore").read_text(encoding="utf-8", errors="replace"):
+        raise RuntimeError("config.local.psd1 must be ignored by Git")
     patcher_test = subprocess.run([sys.executable, str(legend_db_patcher), "--self-test"],
                                   capture_output=True, text=True, check=False)
     if patcher_test.returncode != 0:
@@ -219,6 +223,9 @@ def main() -> int:
         raise RuntimeError("player catalogue does not contain all 23 proven V27 squad asset IDs")
     if len(by_asset) != len(players):
         raise RuntimeError("duplicate assetId in FIFA 14 player catalogue")
+    goalkeepers = [player for player in players if str(player.get("position", "")).upper() == "GK"]
+    if len(goalkeepers) < 50:
+        raise RuntimeError(f"goalkeeper catalogue regression: only {len(goalkeepers)} GK rows")
 
     tier_counts = {"bronze": 0, "silver": 0, "gold": 0}
     for player in players:

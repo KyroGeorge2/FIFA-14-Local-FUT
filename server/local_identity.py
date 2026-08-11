@@ -2946,7 +2946,9 @@ class LocalIdentityStore:
                     {"name": "coins", "funds": coins, "finalFunds": coins},
                     {"name": "points", "funds": points, "finalFunds": points},
                 ],
-                "name": name,
+                # Retail Store treats both name and description as localization keys.
+                # Supplying literal prose here resolves to the frontend's "*" missing-text marker.
+                "name": name_token,
                 # FIFA treats this member as a localization key, not literal
                 # prose. The corresponding locstring is served by the existing
                 # storepackdescriptions endpoint.
@@ -2999,7 +3001,8 @@ class LocalIdentityStore:
                     "packId": pack_id,
                     "packType": pack_type,
                     "purchasePackType": "CARDPACK",
-                    "name": name,
+                    "name": name_token,
+                    "nameText": name,
                     "descriptionText": str(definition.get("description", "")),
                     "category": category,
                     "price": coins,
@@ -4568,11 +4571,52 @@ class LocalIdentityStore:
                     buy_now=int(row["buy_now_price"]), duration=int(row["duration"]), item_payload=payload,
                     trade_state=str(row["trade_state"]), sold_price=int(row["sold_price"] or 0), now=now,
                 ))
+            # A card can be on the Transfer List without being listed for sale yet.
+            # move_items() persists that state as items.pile='trade', while an
+            # auction row is created only after the user chooses List on Market.
+            # Older builds rendered only market_listings here, so moving a card
+            # to pile 5 made it disappear from both My Club and the Transfer List.
+            listed_item_ids = {int(row["item_id"]) for row in rows}
+            unlisted_rows = connection.execute(
+                "SELECT item_id,payload FROM items WHERE persona_id=? AND pile='trade' ORDER BY item_id",
+                (persona_id,),
+            ).fetchall()
+            unlisted = 0
+            for item_row in unlisted_rows:
+                item_id = int(item_row["item_id"])
+                if item_id in listed_item_ids:
+                    continue
+                try:
+                    item_payload = json.loads(item_row["payload"] or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                if not isinstance(item_payload, dict) or not item_payload:
+                    continue
+                item_payload["pile"] = 5
+                item_payload["itemState"] = "free"
+                item_payload["untradeable"] = False
+                item_payload["tradeable"] = True
+                resource = int(item_payload.get("resourceId", item_payload.get("assetId", 0)) or 0)
+                player = MARKET_PLAYER_BY_RESOURCE.get(resource) or item_payload
+                auction = self._market_auction(
+                    player, owner=True, trade_id=0, starting_bid=150, buy_now=200,
+                    duration=60, item_payload=item_payload, now=now, trade_state="inactive",
+                )
+                # tradeId=0 is the native no-auction sentinel: the card lives in
+                # the transfer pile but has not been submitted to auctionhouse.
+                auction.update({
+                    "tradeId": 0, "tradeState": "inactive", "expires": 0,
+                    "EXPIRE_TIME": 0, "expireTime": 0, "buyNowPrice": 0,
+                    "startingBid": 0, "currentBid": 0, "offers": 0,
+                })
+                auctions.append(auction)
+                unlisted += 1
+
             active = sum(1 for row in rows if str(row["trade_state"]) == "active")
             sold = sum(1 for row in rows if str(row["trade_state"]) == "closed")
             total = len(auctions)
             return {"auctionInfo":auctions,"duplicateItemIdList":[],"total":total,
-                    "selling":active,"sold":sold,
+                    "selling":active,"sold":sold,"available":unlisted,"unlisted":unlisted,
                     # Harmless scalar aliases for the transfer-hub/list summary
                     # binders. The canonical page total remains `total`.
                     "tradePileCount":total,"tradePileItems":total,"transferListCount":total,

@@ -832,7 +832,10 @@ class BetaIdentityStore(LocalIdentityStore):
                 # serializer key table (NAME/ID/IMAGEFILE_SMALL/LARGE).
                 return {
                     "ID": tournament_id,
-                    "NAME": str(definition.get("name") or f"Local Cup {tournament_id}"),
+                    # StaticActiveTournamentNameInfo resolves NAME through FUT localization.
+                    # A literal name becomes the retail "*" missing-text marker.
+                    "NAME": f"LOCAL_TOURNAMENT_NAME_{tournament_id}",
+                    "NAME_TEXT": str(definition.get("name") or f"Local Cup {tournament_id}"),
                     "IMAGEFILE": image_key,
                     "IMAGEFILE_SMALL": image_key,
                     "IMAGEFILE_LARGE": image_key,

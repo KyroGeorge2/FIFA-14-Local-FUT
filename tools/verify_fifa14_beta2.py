@@ -386,6 +386,8 @@ def main() -> int:
                 fail(f"Store display grouping changed for pack {pack_type}: {offer}")
             if not str(offer.get("description", "")).startswith("FUT_STORE_PACK_"):
                 fail(f"Store description must be a retail loc token, got {offer.get('description')}")
+            if not str(offer.get("name", "")).startswith("LOCAL_PACK_NAME_"):
+                fail(f"Store name must be a local loc token, got {offer.get('name')}")
 
         partial_update = store.save_squad({"id": 1, "captain": int(items[0]["id"]), "kicktakers": [int(items[0]["id"])]})
         if not partial_update.get("squadList") or len(partial_update["squadList"][0].get("players", [])) != 23:

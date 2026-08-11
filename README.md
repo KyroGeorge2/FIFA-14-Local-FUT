@@ -21,7 +21,7 @@ Enter Gold Cup, finish round 1 with a win, verify non-zero match coins on the re
 
 1. Extract the release ZIP to a normal writable folder.
 2. Run `INSTALL_PREREQUISITES.cmd` as Administrator once if dependencies are missing.
-3. Run `RUN_FIFA14_LOCAL_BETA.cmd` as Administrator.
+3. Run `RUN_FIFA14_LOCAL_BETA.cmd` as Administrator. The launcher auto-detects FIFA 14; if needed, paste the `Game` folder once and it will be remembered in `config.local.psd1`.
 4. Wait for the launcher/server to report that it is ready before entering Ultimate Team.
 
 This project expects an existing legitimate FIFA 14 PC installation and does not include the game itself.
@@ -45,3 +45,11 @@ For contributions, keep changes focused and include the exact gameplay/runtime t
 ## License
 
 See [LICENSE](LICENSE). FIFA, FIFA 14, Ultimate Team, EA SPORTS, and related marks/assets belong to their respective owners. This is an independent preservation/revival project and is not affiliated with or endorsed by Electronic Arts.
+
+## GitHub issue hotfix notes
+
+This package can now use FIFA 14 from any drive. On first launch it checks `config.local.psd1`, the `FIFA14_GAME_ROOT` environment variable, and common EA/Origin/Steam library locations. If nothing is found, paste the folder that contains `fifa14.exe` once; the choice is saved locally and is ignored by Git. An editable template is included as `config.local.psd1.example`.
+
+Fixed in this hotfix: pack/tournament localization keys no longer resolve to `*`; unlisted pile-5 cards remain visible in the Transfer List; the player catalogue contains 61 goalkeepers instead of 5; and an unknown `futPackSelect` package is preserved with a warning instead of killing startup.
+
+**Known stadium workaround (deferred):** before entering a single-player tournament match, own and apply a stadium card in My Club. A missing active stadium can produce the dark/void match presentation reported in issues #4/#5; this package intentionally does not attempt another risky client stadium patch yet.

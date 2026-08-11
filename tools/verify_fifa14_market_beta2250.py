@@ -89,6 +89,11 @@ def main() -> int:
         require(moved["itemData"][0]["success"] is True, f"market win could not be assigned: {moved}")
         listed = store.move_items([{"id": bought_id, "pile": 5}])
         require(listed["itemData"][0]["success"] is True, f"move to transfer pile failed: {listed}")
+        unlisted_pile = store.trade_pile()
+        require(unlisted_pile.get("total") == 1 and unlisted_pile.get("unlisted") == 1,
+                f"unlisted pile-5 card disappeared from transfer list: {unlisted_pile}")
+        require(any(int(a.get("itemData", {}).get("id", 0)) == bought_id for a in unlisted_pile.get("auctionInfo", [])),
+                f"unlisted transfer card missing from auctionInfo renderer: {unlisted_pile}")
 
         # Competitive user listing is auto-bought; proceeds use the classic 5% market tax.
         live_value = store._market_current_value_for(ronaldo, now=1_786_383_600)

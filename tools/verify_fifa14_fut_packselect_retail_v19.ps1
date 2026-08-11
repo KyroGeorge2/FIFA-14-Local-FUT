@@ -1,4 +1,4 @@
-param([string]$GameRoot = "")
+param([string]$GameRoot = "", [switch]$AllowUnknown)
 $ErrorActionPreference = "Stop"
 $toolsDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $projectDir = Split-Path -Parent $toolsDir
@@ -15,6 +15,10 @@ try {
     & $runtime.FilePath @args | Set-Content -LiteralPath $temp -Encoding UTF8
     if ($LASTEXITCODE -ne 0) { throw "Retail futPackSelect inspection failed." }
     $result = Get-Content -LiteralPath $temp -Raw | ConvertFrom-Json
+    if ($result.install.status -eq "unknown" -and $AllowUnknown) {
+        Write-Warning "Skipping exact-retail futPackSelect verification because this install uses an unrecognised package. No unknown archive bytes were overwritten."
+        return
+    }
     if ($result.install.status -ne "retail-original") {
         throw "futPackSelect is not exact retail. Current status: $($result.install.status)"
     }
