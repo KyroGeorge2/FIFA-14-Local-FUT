@@ -43,11 +43,9 @@ MARKERS = (b"fcc_login1", b"beginlogin", b"loading")
 ARCHIVE_PRIORITY = (("cards0.big", "cards0.bh"), ("patch.big", "patch.bh"), ("data1.big", "data1.bh"), ("data0.big", "data0.bh"))
 SHOW = b"ShowLoadingIcon"
 HIDE = b"HideLoadingIcon"
-KNOWN_CARDS0_RECORD_INDEX = 3891
-KNOWN_CARDS0_RECORD_OFFSET = 58_286_528
+KNOWN_CARDS0_RECORD_INDEX = 3891  # reviewed retail index (diagnostic/layout-label only)
+KNOWN_CARDS0_RECORD_OFFSET = 58_286_528  # reviewed retail offset (diagnostic/layout-label only)
 KNOWN_CARDS0_PATH_HASH = "29333257A32EB487"
-KNOWN_CARDS0_RECORD_COUNT = 3957
-KNOWN_CARDS0_NEXT_RECORD_OFFSET = 58_288_256
 KNOWN_APT_ENTRY_NAME = "0"
 KNOWN_APT_ENTRY_OFFSET = 0x40
 KNOWN_APT_ENTRY_SIZE = 0x5B5
@@ -320,29 +318,25 @@ def discover(game_root: Path, scan_path: Path | None = None) -> dict:
 
 
 def resolve_candidate(game_root: Path, state_dir: Path) -> tuple[dict, list[BhRecord], bytes, bytes, dict]:
-    """Resolve the reviewed fcc_login1 package by exact cards0 archive identity.
+    """Resolve the reviewed fcc_login1 package by its stable path hash.
 
-    v2.25.1 attempted semantic marker discovery inside the APT blob.  The real
-    retail package does not expose all of those text markers in the way that
-    heuristic assumed, so a valid reviewed install could produce zero
-    candidates.  The reviewed V24 patcher already established a stronger
-    identity: cards0 record 3891, fixed offset/path hash/next-slot boundary,
-    APT entry name ``0`` at 0x40 with size 0x5B5, and an exact instruction
-    context around APT+0xCA.  Use those invariants directly and fail closed if
-    any of them differ.
+    v2.25.4 assumed a fixed cards0.bh record count/index/offset. Alternate
+    (e.g. cracked) FIFA 14 builds pack cards0 with a different record table
+    -- different total record count, index, and physical offsets -- while the
+    fcc_login1 resource keeps the same path hash. Resolve candidates by that
+    stable path hash, then verify the exact APT layout and BeginLogin
+    instruction context before ever writing, exactly as before. Fail closed
+    if zero or more than one candidate verifies.
     """
     state_dir.mkdir(parents=True, exist_ok=True)
     scan_path = state_dir / SCAN_NAME
     report: dict = {
         "schema": 2,
-        "resolver": "exact-reviewed-cards0-record",
+        "resolver": "path-hash-reviewed-cards0-record",
         "game_root": str(game_root),
         "reviewed_record": {
             "archive": "cards0.big",
-            "index": KNOWN_CARDS0_RECORD_INDEX,
-            "offset": KNOWN_CARDS0_RECORD_OFFSET,
             "path_hash": KNOWN_CARDS0_PATH_HASH,
-            "next_record_offset": KNOWN_CARDS0_NEXT_RECORD_OFFSET,
             "apt_entry_name": KNOWN_APT_ENTRY_NAME,
             "apt_entry_offset": KNOWN_APT_ENTRY_OFFSET,
             "apt_entry_size": KNOWN_APT_ENTRY_SIZE,
@@ -357,53 +351,76 @@ def resolve_candidate(game_root: Path, state_dir: Path) -> tuple[dict, list[BhRe
 
         bh = bh_path.read_bytes()
         records = parse_bh(bh)
-        if len(records) != KNOWN_CARDS0_RECORD_COUNT:
-            raise ValueError(f"cards0.bh has {len(records)} records; expected {KNOWN_CARDS0_RECORD_COUNT}")
-        if KNOWN_CARDS0_RECORD_INDEX >= len(records):
-            raise ValueError("reviewed fcc_login1 record index is outside cards0.bh")
-        record = records[KNOWN_CARDS0_RECORD_INDEX]
-        if record.offset != KNOWN_CARDS0_RECORD_OFFSET:
-            raise ValueError(f"fcc_login1 record offset changed: {record.offset} != {KNOWN_CARDS0_RECORD_OFFSET}")
-        if record.reserved != 0:
-            raise ValueError(f"fcc_login1 reserved field changed: {record.reserved}")
-        path_hash = f"{record.path_hash:016X}"
-        if path_hash != KNOWN_CARDS0_PATH_HASH:
-            raise ValueError(f"fcc_login1 path hash changed: {path_hash} != {KNOWN_CARDS0_PATH_HASH}")
-        next_record = records[KNOWN_CARDS0_RECORD_INDEX + 1]
-        if next_record.offset != KNOWN_CARDS0_NEXT_RECORD_OFFSET:
+        big_size = big_path.stat().st_size
+        target_hash = int(KNOWN_CARDS0_PATH_HASH, 16)
+        path_candidates = [r for r in records if r.path_hash == target_hash]
+        if not path_candidates:
             raise ValueError(
-                f"fcc_login1 next-record boundary changed: {next_record.offset} != {KNOWN_CARDS0_NEXT_RECORD_OFFSET}"
+                f"cards0.bh has {len(records)} records but no fcc_login1 path-hash record ({KNOWN_CARDS0_PATH_HASH})"
             )
-        capacity = next_record.offset - record.offset
-        if capacity <= 0 or record.size <= 0 or record.size > capacity:
-            raise ValueError(f"invalid reviewed fcc_login1 slot: size={record.size}, capacity={capacity}")
 
+        usable: list[dict] = []
+        rejected: list[str] = []
         with big_path.open("rb") as handle:
-            stored = read_record(handle, record)
-        decoded, chunk_info = decode_chunkzip(stored)
-        entries = parse_big_entries(decoded)
-        matching = [e for e in entries if e["name"] == KNOWN_APT_ENTRY_NAME]
-        if len(matching) != 1:
-            raise ValueError(f"expected one fcc_login1 APT entry named {KNOWN_APT_ENTRY_NAME!r}; found {len(matching)}")
-        apt = matching[0]
-        if int(apt["offset"]) != KNOWN_APT_ENTRY_OFFSET or int(apt["size"]) != KNOWN_APT_ENTRY_SIZE:
-            raise ValueError(f"fcc_login1 APT layout changed: offset={apt['offset']}, size={apt['size']}")
-        blob = decoded[apt["offset"]:apt["offset"] + apt["size"]]
-        if not blob.startswith(b"Apt Data"):
-            raise ValueError("fcc_login1 APT entry has no Apt Data magic")
-        if len(blob) <= APT_PATCH_OFFSET:
-            raise ValueError("fcc_login1 APT is shorter than offset 0xCA")
-        opcode = blob[APT_PATCH_OFFSET]
-        if opcode not in (RETAIL_OPCODE, PATCHED_OPCODE):
-            raise ValueError(f"fcc_login1 APT+0xCA is 0x{opcode:02X}, expected retail 0x49 or patched 0x11")
-        context_start = APT_PATCH_OFFSET - len(EXPECTED_CONTEXT_PREFIX)
-        context_end = APT_PATCH_OFFSET + 1 + len(EXPECTED_CONTEXT_SUFFIX)
-        actual_context = blob[context_start:context_end]
-        expected_context = EXPECTED_CONTEXT_PREFIX + bytes([opcode]) + EXPECTED_CONTEXT_SUFFIX
-        if actual_context != expected_context:
-            raise ValueError("fcc_login1 popup branch no longer matches the reviewed BeginLogin instruction sequence")
-        if decoded.count(LOADING_LITERAL) < 1:
-            raise ValueError("fcc_login1 package no longer contains the literal Loading popup message")
+            for record in path_candidates:
+                try:
+                    if record.reserved != 0:
+                        raise ValueError(f"reserved field changed: {record.reserved}")
+                    capacity = physical_capacity(records, record, big_size)
+                    if record.size <= 0 or record.size > capacity:
+                        raise ValueError(f"invalid slot: size={record.size}, capacity={capacity}")
+                    stored = read_record(handle, record)
+                    decoded, chunk_info = decode_chunkzip(stored)
+                    entries = parse_big_entries(decoded)
+                    matching = [e for e in entries if e["name"] == KNOWN_APT_ENTRY_NAME]
+                    if len(matching) != 1:
+                        raise ValueError(f"expected one APT entry named {KNOWN_APT_ENTRY_NAME!r}; found {len(matching)}")
+                    apt = matching[0]
+                    if int(apt["offset"]) != KNOWN_APT_ENTRY_OFFSET or int(apt["size"]) != KNOWN_APT_ENTRY_SIZE:
+                        raise ValueError(f"APT layout changed: offset={apt['offset']}, size={apt['size']}")
+                    blob = decoded[apt["offset"]:apt["offset"] + apt["size"]]
+                    if not blob.startswith(b"Apt Data"):
+                        raise ValueError("no Apt Data magic")
+                    if len(blob) <= APT_PATCH_OFFSET:
+                        raise ValueError("APT is shorter than offset 0xCA")
+                    opcode = blob[APT_PATCH_OFFSET]
+                    if opcode not in (RETAIL_OPCODE, PATCHED_OPCODE):
+                        raise ValueError(f"APT+0xCA is 0x{opcode:02X}, expected retail 0x49 or patched 0x11")
+                    context_start = APT_PATCH_OFFSET - len(EXPECTED_CONTEXT_PREFIX)
+                    context_end = APT_PATCH_OFFSET + 1 + len(EXPECTED_CONTEXT_SUFFIX)
+                    actual_context = blob[context_start:context_end]
+                    expected_context = EXPECTED_CONTEXT_PREFIX + bytes([opcode]) + EXPECTED_CONTEXT_SUFFIX
+                    if actual_context != expected_context:
+                        raise ValueError("popup branch does not match the reviewed BeginLogin instruction sequence")
+                    if decoded.count(LOADING_LITERAL) < 1:
+                        raise ValueError("package has no literal Loading popup message")
+                    usable.append({
+                        "record": record, "capacity": capacity, "stored": stored,
+                        "decoded": decoded, "chunk_info": chunk_info, "apt": apt,
+                        "opcode": opcode, "blob": blob,
+                    })
+                except Exception as exc:
+                    rejected.append(f"index {record.index} offset {record.offset}: {exc}")
+
+        if len(usable) != 1:
+            detail = "; ".join(rejected[:4])
+            if not usable:
+                raise ValueError(
+                    "fcc_login1 path-hash record was found but no uniquely compatible package could be verified"
+                    + (f": {detail}" if detail else "")
+                )
+            raise ValueError(f"multiple ({len(usable)}) compatible fcc_login1 records were found; refusing an ambiguous write")
+
+        chosen = usable[0]
+        record: BhRecord = chosen["record"]
+        capacity = chosen["capacity"]
+        stored = chosen["stored"]
+        decoded = chosen["decoded"]
+        chunk_info = chosen["chunk_info"]
+        apt = chosen["apt"]
+        opcode = chosen["opcode"]
+        blob = chosen["blob"]
+        path_hash = f"{record.path_hash:016X}"
 
         c = {
             "archive": "cards0.big",
@@ -423,6 +440,9 @@ def resolve_candidate(game_root: Path, state_dir: Path) -> tuple[dict, list[BhRe
         }
         report.update({
             "status": "verified",
+            "layout": "reviewed-retail" if (
+                record.index == KNOWN_CARDS0_RECORD_INDEX and record.offset == KNOWN_CARDS0_RECORD_OFFSET
+            ) else "dynamically-resolved",
             "record": {k: c[k] for k in ("record_index", "record_offset", "record_size", "capacity", "path_hash")},
             "apt": {
                 "entry_index": apt["index"],
