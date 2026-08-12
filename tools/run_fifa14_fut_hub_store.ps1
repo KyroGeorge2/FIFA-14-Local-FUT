@@ -239,10 +239,10 @@ if (-not $SkipBranchApply) {
 # V27 parity: fresh users take Icebreaker; persisted clubs use FIFA's retail returning-user route.
 if (-not $SkipNavApply) {
     if ($state.hasClub) {
-        & $python $dynamicRoute --game-root $GameRoot --state-dir $routeStateDir --restore-retail
+        & $python $dynamicRoute --game-root $GameRoot --state-dir $routeStateDir --restore-retail --allow-unknown
         if ($LASTEXITCODE -ne 0) { throw "Restoring the retail returning-user NAV route failed." }
     } else {
-        & $python $dynamicRoute --game-root $GameRoot --state-dir $routeStateDir --restore-icebreaker
+        & $python $dynamicRoute --game-root $GameRoot --state-dir $routeStateDir --restore-icebreaker --allow-unknown
         if ($LASTEXITCODE -ne 0) { throw "Installing the authenticated Icebreaker NAV route failed." }
     }
 }

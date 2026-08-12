@@ -20,10 +20,10 @@ import zlib
 BH_MAGIC = b"ViV4"
 CHUNKZIP_MAGIC = b"chunkzip"
 
-RECORD_INDEX = 16_469
-RECORD_OFFSET = 299_329_536
+RECORD_INDEX = 16_469  # reviewed retail index (diagnostic/default only)
+RECORD_OFFSET = 299_329_536  # reviewed retail offset (diagnostic/default only)
 RECORD_PATH_HASH = 0x4B5CD1DA3749E8E0
-SLOT_CAPACITY = 640
+SLOT_CAPACITY = 640  # reviewed retail slot capacity
 NEXT_RECORD_OFFSET = RECORD_OFFSET + SLOT_CAPACITY
 
 IDENTITIES = {
@@ -79,30 +79,90 @@ def atomic_write(path: Path, data: bytes) -> None:
         raise
 
 
-def parse_bh_record(bh: bytes) -> dict:
+def parse_bh_records(bh: bytes) -> list[dict]:
+    """Parse every ViV4 BH row without assuming the retail record number.
+
+    Alternate FIFA 14 title-update/data layouts can move a resource to a
+    different table index and physical offset while retaining the same path
+    hash.  We therefore resolve futLogInFlow by its stable path hash and then
+    verify the decoded payload before any write.
+    """
     if len(bh) < 16 or bh[:4] != BH_MAGIC:
         raise ValueError("data1.bh is not a ViV4 index")
     count = struct.unpack_from(">I", bh, 8)[0]
-    if RECORD_INDEX >= count:
-        raise ValueError(f"data1.bh has {count} records; expected index {RECORD_INDEX}")
-    table_offset = 16 + RECORD_INDEX * 20
-    offset, size, reserved, hash_hi, hash_lo = struct.unpack_from(">IIIII", bh, table_offset)
-    path_hash = (hash_hi << 32) | hash_lo
-    next_offset = struct.unpack_from(">I", bh, table_offset + 20)[0]
-    if offset != RECORD_OFFSET:
-        raise ValueError(f"unexpected futLogInFlow offset {offset}; expected {RECORD_OFFSET}")
-    if path_hash != RECORD_PATH_HASH:
-        raise ValueError(f"unexpected futLogInFlow path hash {path_hash:016X}")
-    if next_offset != NEXT_RECORD_OFFSET or next_offset - offset != SLOT_CAPACITY:
-        raise ValueError("futLogInFlow slot layout does not match the verified 640-byte record slot")
-    return {
-        "table_offset": table_offset,
-        "offset": offset,
-        "size": size,
-        "reserved": reserved,
-        "path_hash": path_hash,
-        "next_offset": next_offset,
-    }
+    table_end = 16 + count * 20
+    if table_end > len(bh):
+        raise ValueError(f"data1.bh record table is truncated: {count} records need {table_end} bytes")
+    rows = []
+    for index in range(count):
+        table_offset = 16 + index * 20
+        offset, size, reserved, hash_hi, hash_lo = struct.unpack_from(">IIIII", bh, table_offset)
+        rows.append({
+            "record_index": index,
+            "table_offset": table_offset,
+            "offset": offset,
+            "size": size,
+            "reserved": reserved,
+            "path_hash": (hash_hi << 32) | hash_lo,
+        })
+    return rows
+
+
+def _physical_slot_capacity(rows: list[dict], record: dict, big_size: int) -> int:
+    offset = record["offset"]
+    later = [row["offset"] for row in rows if row["offset"] > offset]
+    next_offset = min(later) if later else big_size
+    capacity = next_offset - offset
+    if capacity < record["size"]:
+        raise ValueError(
+            f"futLogInFlow physical slot is invalid: size={record['size']} capacity={capacity}"
+        )
+    return capacity
+
+
+def resolve_bh_record(bh: bytes, big_path: Path) -> dict:
+    rows = parse_bh_records(bh)
+    candidates = [row.copy() for row in rows if row["path_hash"] == RECORD_PATH_HASH]
+    if not candidates:
+        raise ValueError(
+            f"data1.bh has {len(rows)} records but no futLogInFlow path-hash record "
+            f"({RECORD_PATH_HASH:016X})"
+        )
+
+    big_size = big_path.stat().st_size
+    usable = []
+    rejected = []
+    with big_path.open("rb") as handle:
+        for candidate in candidates:
+            try:
+                if candidate["size"] <= 0:
+                    raise ValueError(f"invalid record size {candidate['size']}")
+                candidate["slot_capacity"] = _physical_slot_capacity(rows, candidate, big_size)
+                handle.seek(candidate["offset"])
+                payload = handle.read(candidate["size"])
+                if len(payload) != candidate["size"]:
+                    raise ValueError("short read")
+                decoded = decode_chunkzip(payload)
+                # A stable path hash alone is not enough to authorize a write.
+                # Require the expected FUT login state/advance structure too.
+                find_advance_target(decoded)
+                candidate["payload"] = payload
+                candidate["decoded"] = decoded
+                usable.append(candidate)
+            except Exception as exc:
+                rejected.append(f"index {candidate['record_index']} offset {candidate['offset']}: {exc}")
+
+    if len(usable) != 1:
+        detail = "; ".join(rejected[:4])
+        if len(usable) == 0:
+            raise ValueError(
+                "futLogInFlow path-hash record was found but no uniquely compatible NAV payload could be verified"
+                + (f": {detail}" if detail else "")
+            )
+        raise ValueError(
+            f"multiple ({len(usable)}) compatible futLogInFlow records were found; refusing an ambiguous write"
+        )
+    return usable[0]
 
 
 def decode_chunkzip(payload: bytes) -> bytes:
@@ -204,54 +264,60 @@ def read_install(game_root: Path) -> tuple[dict, bytes, bytes, bytes]:
     if not big_path.is_file() or not bh_path.is_file():
         raise FileNotFoundError(f"data1.big/data1.bh not found under {game_root}")
     bh = bh_path.read_bytes()
-    record = parse_bh_record(bh)
-    if record["size"] <= 0 or record["size"] > SLOT_CAPACITY:
-        raise ValueError(f"invalid futLogInFlow size {record['size']}")
-    with big_path.open("rb") as handle:
-        handle.seek(RECORD_OFFSET)
-        payload = handle.read(record["size"])
-    if len(payload) != record["size"]:
-        raise ValueError("short read from data1.big")
-    decoded = decode_chunkzip(payload)
+    record = resolve_bh_record(bh, big_path)
+    payload = record.pop("payload")
+    decoded = record.pop("decoded")
     status = classify(payload, decoded, record["size"])
     info = {
         "status": status,
-        "record_index": RECORD_INDEX,
-        "record_offset": RECORD_OFFSET,
+        "record_index": record["record_index"],
+        "record_offset": record["offset"],
         "record_size": record["size"],
-        "slot_capacity": SLOT_CAPACITY,
+        "slot_capacity": record["slot_capacity"],
         "stored_sha256": sha256_bytes(payload),
         "decoded_sha256": sha256_bytes(decoded),
         "path_hash": f"{record['path_hash']:016X}",
+        "layout": "reviewed-retail" if (
+            record["record_index"] == RECORD_INDEX and record["offset"] == RECORD_OFFSET
+        ) else "dynamically-resolved",
     }
     return info, payload, decoded, bh
 
 
-def update_bh_size(bh: bytes, size: int) -> bytes:
-    record = parse_bh_record(bh)
+def update_bh_size(bh: bytes, table_offset: int, size: int) -> bytes:
     result = bytearray(bh)
-    struct.pack_into(">I", result, record["table_offset"] + 4, size)
+    if table_offset < 16 or table_offset + 8 > len(result):
+        raise ValueError("resolved futLogInFlow BH table offset is out of range")
+    struct.pack_into(">I", result, table_offset + 4, size)
     return bytes(result)
 
 
-def write_install(game_root: Path, payload: bytes, bh: bytes, expected_status: str) -> dict:
+def write_install(game_root: Path, payload: bytes, bh: bytes, current_info: dict, expected_status: str) -> dict:
     expected = IDENTITIES[expected_status]
     if len(payload) != expected["size"] or sha256_bytes(payload) != expected["stored"]:
         raise AssertionError("refusing to write a payload that does not match the reviewed target identity")
-    if len(payload) > SLOT_CAPACITY:
-        raise AssertionError("target payload exceeds verified slot capacity")
+    slot_capacity = int(current_info["slot_capacity"])
+    record_offset = int(current_info["record_offset"])
+    record_index = int(current_info["record_index"])
+    table_offset = 16 + record_index * 20
+    if len(payload) > slot_capacity:
+        raise AssertionError(
+            f"target payload ({len(payload)} bytes) exceeds resolved slot capacity ({slot_capacity} bytes)"
+        )
     big_path = game_root / "data1.big"
     bh_path = game_root / "data1.bh"
     with big_path.open("r+b") as handle:
-        handle.seek(RECORD_OFFSET)
+        handle.seek(record_offset)
         handle.write(payload)
-        handle.write(b"\0" * (SLOT_CAPACITY - len(payload)))
+        handle.write(b"\0" * (slot_capacity - len(payload)))
         handle.flush()
         os.fsync(handle.fileno())
-    atomic_write(bh_path, update_bh_size(bh, len(payload)))
+    atomic_write(bh_path, update_bh_size(bh, table_offset, len(payload)))
     installed, _, _, _ = read_install(game_root)
     if installed["status"] != expected_status:
         raise AssertionError(f"post-write verification failed: {installed['status']}")
+    if installed["record_index"] != record_index or installed["record_offset"] != record_offset:
+        raise AssertionError("post-write resolver selected a different NAV record")
     return installed
 
 
@@ -284,7 +350,7 @@ def set_status(game_root: Path, state_dir: Path, target_status: str) -> dict:
     expected = IDENTITIES[target_status]
     if len(target_payload) != expected["size"] or sha256_bytes(target_payload) != expected["stored"]:
         raise AssertionError("encoded target record identity mismatch")
-    installed = write_install(game_root, target_payload, bh, target_status)
+    installed = write_install(game_root, target_payload, bh, current, target_status)
     result = {
         "action": "set-status",
         "changed": True,
@@ -301,6 +367,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Restore FIFA 14's verified FUT first-use NAV route to Icebreaker")
     parser.add_argument("--game-root", required=True, type=Path)
     parser.add_argument("--state-dir", type=Path)
+    parser.add_argument("--allow-unknown", action="store_true", help="skip incompatible/unknown NAV layouts without failing startup")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--apply", action="store_true", help="route futLogIn1 advance to iceBreaker")
     group.add_argument("--restore-retail", action="store_true")
@@ -328,6 +395,15 @@ def main() -> int:
         print(json.dumps(result, indent=2))
         return 0
     except Exception as error:
+        if args.allow_unknown:
+            print(json.dumps({
+                "action": "compatibility-skip",
+                "changed": False,
+                "warning": str(error),
+                "type": type(error).__name__,
+                "safety": "data1.big/data1.bh left untouched",
+            }, indent=2))
+            return 0
         print(json.dumps({"error": str(error), "type": type(error).__name__}, indent=2))
         return 1
 

@@ -61,4 +61,6 @@ Fixed in this hotfix: pack/tournament localization keys no longer resolve to `*`
 
 Public compatibility update: if `futPackSelect` cannot be inspected at all because an installation uses a different `patch.big`/`patch.bh` layout, startup continues in unverified compatibility mode and does **not** write recovery bytes to that unknown archive. The branch-only helperFunctions patch additionally supports shifted/repacked BH indexes by content scanning and can fall back from `patch` to `data0`; writes still occur only after the decoded helperFunctions package matches the reviewed identity.
 
+NAV compatibility update: the returning-user/first-use `futLogInFlow.nav` helper no longer assumes retail `data1.bh` record index 16469 or offset 299329536. It resolves the stable path hash, verifies the decoded FUT login transition structure, and uses the installed record offset/capacity. If an alternate NAV payload cannot be verified safely, it is left untouched and startup continues in compatibility mode instead of aborting.
+
 **Known stadium workaround (deferred):** before entering a single-player tournament match, own and apply a stadium card in My Club. A missing active stadium can produce the dark/void match presentation reported in issues #4/#5; this package intentionally does not attempt another risky client stadium patch yet.
