@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import hashlib
 import json
 from contextlib import closing
 from pathlib import Path
@@ -15,9 +14,6 @@ if str(SERVER) not in sys.path:
 
 from fifa14_ids import decode_resource_id, definition_id_for, resource_id_for  # noqa: E402
 
-EXPECTED_GAME_SHA256 = "034991bce371bb2d4e802184dc43e423b0fd7b6d06bf0e41ef12ca0dbc623916"
-EXPECTED_CARDS_SHA256 = "642b11ef3da7ef28e55a40965a2f364012fa6090252a84c3d9bfba5ab1f060e6"
-EXPECTED_POW_SHA256 = "ac39ee88e8f0d3a90c0c9eb3c01c030110f892eba38ec52ed8ad05038c2b24f0"
 
 
 def require(path: Path, markers=()):
@@ -27,10 +23,6 @@ def require(path: Path, markers=()):
     missing = [marker for marker in markers if marker not in text]
     if missing:
         raise RuntimeError(f"{path.name} missing markers: {missing}")
-
-
-def sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def main() -> int:
@@ -119,7 +111,7 @@ def main() -> int:
         raise RuntimeError("normal launcher does not pass the resolved FIFA path into the beta runner")
     if 'Get-Process -Name "fifa14"' not in launcher_text or 'Stop-Process -Force' not in launcher_text:
         raise RuntimeError("normal launcher does not close stale fifa14.exe before archive/database patching")
-    require(run_script, ("dlc\\dlc_powdll\\dlc\\powdll\\powdllzf.dll", 'Join-Path $GameRoot "powdllzf.dll"', "Resolved powdllzf.dll", "expectedPowSha256",
+    require(run_script, ("dlc\\dlc_powdll\\dlc\\powdll\\powdllzf.dll", 'Join-Path $GameRoot "powdllzf.dll"', "Resolved powdllzf.dll", "hash enforcement is disabled",
                          "Compact My Club:", "distinctOwnedResources", "legendPlayersRemoved", "stalePacksClosed", "stalePackItemsCleared",
                          "fifa14-legend-db-patch-v24022.json", "fifa14-client-db-scan-v24022.json",
                          "extract_fifa14_fut_competition_ui.py", "fut-competition-ui-static-extract.zip",
@@ -647,10 +639,14 @@ def main() -> int:
     if manager_doc.get("liveEmissionEnabled") is not False:
         raise RuntimeError("manager live emission must remain disabled until retail resource IDs are verified")
 
-    print("Retail validation hashes:")
-    print("  fifa14.exe     ", EXPECTED_GAME_SHA256)
-    print("  CardsDLLzf.dll ", EXPECTED_CARDS_SHA256)
-    print("  powdllzf.dll   ", EXPECTED_POW_SHA256)
+    for launcher in (run_script, beta_run_script):
+        launcher_text = launcher.read_text(encoding="utf-8", errors="replace")
+        if "Unsupported fifa14.exe SHA-256" in launcher_text or "expectedExeSha256" in launcher_text:
+            raise RuntimeError(f"{launcher.name} still contains the old executable hash blocker")
+        if "hash enforcement is disabled" not in launcher_text:
+            raise RuntimeError(f"{launcher.name} does not declare the non-blocking compatibility policy")
+
+    print("Executable/DLL hash enforcement: disabled (BIG/BH record safety checks remain enabled).")
     print("FIFA 14 LOCAL FUT v2.41.1 BETA 2.25.9 INSTALL VERIFIED (Transfer Market Economy Beta 2 + accessible pack weights).")
     print(f"Real FIFA 14 base-card catalogue: {len(players)} cards {tier_counts}; special variants: {len(specials)}; Legends reference catalogue: {len(legends)}; progression BETA + retail-safe Seasons bootstrap + JSON item-metadata guard + compact club/single New Items pile/parser-safe consumables/base-definition special wire contract/mixed packs/special draw/Send to Club/duplicates/quicksell/store metadata validated.")
     return 0

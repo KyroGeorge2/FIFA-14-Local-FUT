@@ -2,6 +2,13 @@
 
 BETA 2.25.9 is built directly on the working 2.25.8 Store/market/consumables branch. It targets the completed-match failure captured after a real Gold Cup game.
 
+## Game-build compatibility
+
+The launcher does **not** hard-block FIFA 14 installations based on the SHA-256 hash of `fifa14.exe`, `CardsDLLzf.dll`, or `powdllzf.dll`. If the required files are present, startup is allowed to continue. This makes the local FUT runtime usable with other FIFA 14 executable revisions where the underlying game data is compatible.
+
+This is not a promise that every modified or alternate executable is compatible. Native signatures can differ between game builds. The `.big`/`.bh` patching tools keep their own record/layout validation and will refuse an unknown archive record rather than blindly writing into it. No crack, DRM-bypass, or executable files are included in this repository.
+
+
 ## BETA 2.25.9 changes
 
 - Completes Blaze GameReporting component 28 / command 2 with its asynchronous terminal ResultNotification instead of returning only an empty observation success.

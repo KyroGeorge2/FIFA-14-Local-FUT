@@ -45,12 +45,11 @@ function Stop-Fifa14ForOnDiskPatch {
 # RUN_FIFA14_HUB_STORE.cmd. FIFA is launched later by the trace helper.
 Stop-Fifa14ForOnDiskPatch
 
-# Exact-build guard: all native signatures and archive patches in V2.37 were
-# validated against the user's retail PC build. Refuse unknown binaries before
-# changing any archive.
-$expectedExeSha256 = "034991BCE371BB2D4E802184DC43E423B0FD7B6D06BF0E41EF12CA0DBC623916"
-$expectedCardsSha256 = "642B11EF3DA7EF28E55A40965A2F364012FA6090252A84C3D9BFBA5AB1F060E6"
-$expectedPowSha256 = "AC39EE88E8F0D3A90C0C9EB3C01C030110F892EBA38EC52ED8AD05038C2B24F0"
+# Compatibility policy: do not hard-block the launcher on executable/DLL hashes.
+# The local FUT runtime still requires the game binary and FUT DLLs to exist,
+# while archive patchers independently validate the specific BIG/BH records
+# they modify before writing. Unknown game builds are therefore allowed to
+# continue, but are not guaranteed to be compatible with native signatures.
 $cardsDll = Join-Path $GameRoot "CardsDLLzf.dll"
 $powCandidates = @(
     (Join-Path $GameRoot "dlc\dlc_powdll\dlc\powdll\powdllzf.dll"),
@@ -58,19 +57,14 @@ $powCandidates = @(
 )
 $powDll = $powCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 foreach ($binary in @($GameExe, $cardsDll)) {
-    if (-not (Test-Path -LiteralPath $binary)) { throw "Required exact-build binary not found: $binary" }
+    if (-not (Test-Path -LiteralPath $binary)) { throw "Required FIFA 14 binary not found: $binary" }
 }
 if ([string]::IsNullOrWhiteSpace($powDll)) {
-    throw ("Required exact-build powdllzf.dll not found. Checked: " + ($powCandidates -join "; "))
+    throw ("Required powdllzf.dll not found. Checked: " + ($powCandidates -join "; "))
 }
 Write-Host ("Resolved powdllzf.dll: " + $powDll)
-$actualExeSha256 = (Get-FileHash -LiteralPath $GameExe -Algorithm SHA256).Hash.ToUpperInvariant()
-$actualCardsSha256 = (Get-FileHash -LiteralPath $cardsDll -Algorithm SHA256).Hash.ToUpperInvariant()
-$actualPowSha256 = (Get-FileHash -LiteralPath $powDll -Algorithm SHA256).Hash.ToUpperInvariant()
-if ($actualExeSha256 -ne $expectedExeSha256) { throw "Unsupported fifa14.exe SHA-256: $actualExeSha256 (expected $expectedExeSha256)" }
-if ($actualCardsSha256 -ne $expectedCardsSha256) { throw "Unsupported CardsDLLzf.dll SHA-256: $actualCardsSha256 (expected $expectedCardsSha256)" }
-if ($actualPowSha256 -ne $expectedPowSha256) { throw "Unsupported powdllzf.dll SHA-256: $actualPowSha256 (expected $expectedPowSha256)" }
-Write-Host "Exact FIFA 14 PC build verified (EXE + CardsDLLzf.dll + DLC powdllzf.dll)."
+Write-Host "Executable/DLL hash enforcement is disabled; continuing with the detected FIFA 14 installation." -ForegroundColor Yellow
+Write-Host "Archive patchers will still validate supported BIG/BH record layouts before writing." -ForegroundColor DarkGray
 
 $branchApply = Join-Path $PSScriptRoot "apply_fifa14_fut_branch_bypass.ps1"
 $popupApply = Join-Path $PSScriptRoot "apply_fifa14_fcc_login1_popup.ps1"
