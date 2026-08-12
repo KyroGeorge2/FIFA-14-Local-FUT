@@ -4426,7 +4426,9 @@ def create_old_protossl_cert_files(hostname: str, directory: Path, force: bool =
         "[provider_sect]\ndefault = default_sect\nlegacy = legacy_sect\n"
         "[default_sect]\nactivate = 1\n[legacy_sect]\nactivate = 1\n"
         "[algorithm_sect]\n[ssl_sect]\nsystem_default = system_default_sect\n"
-        "[system_default_sect]\nCipherString = DEFAULT:@SECLEVEL=0\nMinProtocol = TLSv1\n",
+        "[system_default_sect]\nCipherString = DEFAULT:@SECLEVEL=0\nMinProtocol = TLSv1\n"
+        "[req]\ndistinguished_name = req_distinguished_name\nprompt = no\n"
+        "[req_distinguished_name]\n",
         encoding="ascii",
     )
 
