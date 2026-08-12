@@ -6,7 +6,7 @@ BETA 2.25.9 is built directly on the working 2.25.8 Store/market/consumables bra
 
 The launcher does **not** hard-block FIFA 14 installations based on the SHA-256 hash of `fifa14.exe`, `CardsDLLzf.dll`, or `powdllzf.dll`. If the required files are present, startup is allowed to continue. This makes the local FUT runtime usable with other FIFA 14 executable revisions where the underlying game data is compatible.
 
-This is not a promise that every modified or alternate executable is compatible. Native signatures can differ between game builds. The `.big`/`.bh` patching tools keep their own record/layout validation and will refuse an unknown archive record rather than blindly writing into it. No crack, DRM-bypass, or executable files are included in this repository.
+This is not a promise that every modified or alternate executable is compatible. Native signatures and archive layouts can differ between game builds. For the helperFunctions branch patch, the patcher now resolves a compatible package by its reviewed **decoded content** instead of assuming retail record index 2146; if an older/smaller `patch.bh` does not contain it, the launcher tries the base `data0` archive. If neither archive has a uniquely verified package, that write is skipped and startup continues rather than guessing an offset. No crack, DRM-bypass, or executable files are included in this repository.
 
 
 ## BETA 2.25.9 changes
@@ -58,5 +58,7 @@ See [LICENSE](LICENSE). FIFA, FIFA 14, Ultimate Team, EA SPORTS, and related mar
 This package can now use FIFA 14 from any drive. On first launch it checks `config.local.psd1`, the `FIFA14_GAME_ROOT` environment variable, and common EA/Origin/Steam library locations. If nothing is found, paste the folder that contains `fifa14.exe` once; the choice is saved locally and is ignored by Git. An editable template is included as `config.local.psd1.example`.
 
 Fixed in this hotfix: pack/tournament localization keys no longer resolve to `*`; unlisted pile-5 cards remain visible in the Transfer List; the player catalogue contains 61 goalkeepers instead of 5; and an unknown `futPackSelect` package is preserved with a warning instead of killing startup.
+
+Public compatibility update: if `futPackSelect` cannot be inspected at all because an installation uses a different `patch.big`/`patch.bh` layout, startup continues in unverified compatibility mode and does **not** write recovery bytes to that unknown archive. The branch-only helperFunctions patch additionally supports shifted/repacked BH indexes by content scanning and can fall back from `patch` to `data0`; writes still occur only after the decoded helperFunctions package matches the reviewed identity.
 
 **Known stadium workaround (deferred):** before entering a single-player tournament match, own and apply a stadium card in My Club. A missing active stadium can produce the dark/void match presentation reported in issues #4/#5; this package intentionally does not attempt another risky client stadium patch yet.

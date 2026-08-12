@@ -13,8 +13,30 @@ $temp = Join-Path $env:TEMP ("fifa14-v19-retail-inspect-{0}.json" -f [Guid]::New
 try {
     $args = @($runtime.Prefix) + @($recovery, "--game-root", $GameRoot, "--state-dir", $stateDir, "--inspect")
     & $runtime.FilePath @args | Set-Content -LiteralPath $temp -Encoding UTF8
-    if ($LASTEXITCODE -ne 0) { throw "Retail futPackSelect inspection failed." }
-    $result = Get-Content -LiteralPath $temp -Raw | ConvertFrom-Json
+    $inspectExit = $LASTEXITCODE
+    $inspectRaw = if (Test-Path -LiteralPath $temp) { Get-Content -LiteralPath $temp -Raw } else { "" }
+    if ($inspectExit -ne 0) {
+        if ($AllowUnknown) {
+            $detail = "archive layout could not be identified"
+            try {
+                $inspectFailure = $inspectRaw | ConvertFrom-Json
+                if ($inspectFailure.error) { $detail = [string]$inspectFailure.error }
+            } catch { }
+            Write-Warning ("Skipping exact-retail futPackSelect verification in unverified compatibility mode: " + $detail)
+            Write-Warning "No unknown archive bytes were overwritten."
+            return
+        }
+        throw "Retail futPackSelect inspection failed."
+    }
+    try {
+        $result = $inspectRaw | ConvertFrom-Json
+    } catch {
+        if ($AllowUnknown) {
+            Write-Warning "Skipping exact-retail futPackSelect verification because the inspection result could not be parsed. No unknown archive bytes were overwritten."
+            return
+        }
+        throw
+    }
     if ($result.install.status -eq "unknown" -and $AllowUnknown) {
         Write-Warning "Skipping exact-retail futPackSelect verification because this install uses an unrecognised package. No unknown archive bytes were overwritten."
         return

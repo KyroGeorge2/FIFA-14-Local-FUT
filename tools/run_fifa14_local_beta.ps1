@@ -353,7 +353,7 @@ if (-not $SkipStaticExtract) {
     Write-Host "futPackSelect recovery/compatibility check completed."
 }
 if (-not $SkipBranchApply) {
-    & $branchApply -Mode $Mode -GameRoot $GameRoot -DualArchive:$DualArchive
+    & $branchApply -Mode $Mode -GameRoot $GameRoot -DualArchive:$DualArchive -AllowUnknown
 }
 
 # V27 parity: fresh users take Icebreaker; persisted clubs use FIFA's retail returning-user route.

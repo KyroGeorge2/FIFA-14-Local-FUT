@@ -100,6 +100,10 @@ def main() -> int:
     require(pack_v18, ("patch_fifa14_fut_packselect_safe_relay_v17.py", "--restore", "retail-original"))
     require(pack_v17, ("patch_fifa14_fut_packselect_no_cinematic_v16.py", "RETAIL_APT_SHA256", "recover_retail_decoded"))
     require(pack_v16, ("RETAIL_APT_SHA256", "RETAIL_DECODED_SHA256", "retail-original"))
+    pack_restore_wrapper = ROOT / "tools" / "restore_fifa14_fut_packselect_retail_v19.ps1"
+    pack_verify_wrapper = ROOT / "tools" / "verify_fifa14_fut_packselect_retail_v19.ps1"
+    require(pack_restore_wrapper, ("AllowUnknown", "inspection is unavailable", "continuing startup in unverified compatibility mode", "No recovery bytes were written"))
+    require(pack_verify_wrapper, ("AllowUnknown", "Skipping exact-retail futPackSelect verification in unverified compatibility mode", "No unknown archive bytes were overwritten"))
     require(setup, ("Resolve-Fifa14Paths", "Save-Fifa14Config", "RUN_FIFA14_LOCAL_BETA.cmd"))
     setup_text = setup.read_text(encoding="utf-8", errors="replace")
     if "-PromptIfMissing" not in setup_text or "config.local.psd1" not in (ROOT / "tools" / "common.ps1").read_text(encoding="utf-8", errors="replace"):

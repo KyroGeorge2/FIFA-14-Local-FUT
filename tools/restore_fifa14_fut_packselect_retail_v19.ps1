@@ -21,11 +21,27 @@ if ($AllowUnknown) {
     try {
         $inspectArgs = @($runtime.Prefix) + @($recovery, "--game-root", $GameRoot, "--state-dir", $stateDir, "--inspect")
         & $runtime.FilePath @inspectArgs | Set-Content -LiteralPath $temp -Encoding UTF8
-        if ($LASTEXITCODE -ne 0) { throw "Could not inspect futPackSelect before recovery." }
-        $before = Get-Content -LiteralPath $temp -Raw | ConvertFrom-Json
+        $inspectExit = $LASTEXITCODE
+        $inspectRaw = if (Test-Path -LiteralPath $temp) { Get-Content -LiteralPath $temp -Raw } else { "" }
+        if ($inspectExit -ne 0) {
+            $detail = "archive layout could not be identified"
+            try {
+                $inspectFailure = $inspectRaw | ConvertFrom-Json
+                if ($inspectFailure.error) { $detail = [string]$inspectFailure.error }
+            } catch { }
+            Write-Warning ("futPackSelect inspection is unavailable for this FIFA 14 installation: " + $detail)
+            Write-Warning "Leaving futPackSelect untouched and continuing startup in unverified compatibility mode. No recovery bytes were written."
+            return
+        }
+        try {
+            $before = $inspectRaw | ConvertFrom-Json
+        } catch {
+            Write-Warning "futPackSelect inspection returned an unreadable result. Leaving it untouched and continuing startup in unverified compatibility mode."
+            return
+        }
         if ($before.install.status -eq "unknown") {
             Write-Warning ("Unrecognised futPackSelect package detected (APT " + $before.install.apt_sha256 + "). Leaving it untouched instead of aborting startup.")
-            Write-Warning "If FUT pack selection itself is broken, repair/verify FIFA 14 in EA/Origin and run again."
+            Write-Warning "This installation may use a different title update/archive revision. Compatibility is not guaranteed, but startup will continue."
             return
         }
     } finally {

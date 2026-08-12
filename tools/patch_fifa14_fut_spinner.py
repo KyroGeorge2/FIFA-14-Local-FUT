@@ -112,6 +112,13 @@ def parse_bh(data: bytes) -> list[BhRecord]:
 
 
 def get_record(data: bytes, spec: ArchiveSpec) -> BhRecord:
+    """Return the exact reviewed retail record from a BH index.
+
+    This remains the strict resolver used for legacy/backup validation paths.
+    Public compatibility mode uses ``resolve_compatible_record`` below so a
+    repacked or older title-update BH can still be handled when the actual
+    helperFunctions payload is byte-for-byte/decoded-identical.
+    """
     records = parse_bh(data)
     if spec.expected_index >= len(records):
         raise ValueError(f"{spec.name}.bh does not contain record {spec.expected_index}")
@@ -123,6 +130,114 @@ def get_record(data: bytes, spec: ArchiveSpec) -> BhRecord:
             f"{spec.name} helperFunctions record changed: actual={actual}, expected={expected}"
         )
     return record
+
+
+def detect_modes_from_apt(apt: bytes) -> list[str]:
+    return [
+        candidate
+        for candidate, changes in PATCHES.items()
+        if all(
+            apt[offset : offset + len(after)] == after
+            for offset, _before, after, _description in changes
+        )
+    ]
+
+
+def inspect_helper_payload(payload: bytes, spec: ArchiveSpec) -> dict:
+    decoded, chunk_info = decode_chunkzip(payload)
+    apt_entry = get_apt_entry(decoded)
+    apt = decoded[apt_entry.offset : apt_entry.offset + apt_entry.size]
+    decoded_hash = sha256_bytes(decoded)
+    stored_hash = sha256_bytes(payload)
+    modes = detect_modes_from_apt(apt)
+    return {
+        "payload": payload,
+        "decoded": decoded,
+        "stored_sha256": stored_hash,
+        "decoded_sha256": decoded_hash,
+        "apt_sha256": sha256_bytes(apt),
+        "chunkzip": chunk_info,
+        "detected_modes": modes,
+        "is_reviewed_retail_decoded": decoded_hash == spec.expected_decoded_sha256,
+        "is_reviewed_retail_stored": stored_hash == spec.expected_stored_sha256,
+    }
+
+
+def resolve_compatible_record(game_root: Path, spec: ArchiveSpec) -> tuple[BhRecord, dict, str]:
+    """Resolve helperFunctions by content when archive record numbering differs.
+
+    Some alternate/older FIFA 14 installs have a much smaller patch.bh, so the
+    retail title-update record index does not exist.  We do *not* guess an
+    offset.  Instead we first try the exact reviewed record, then scan BH
+    records for a unique payload whose decoded helperFunctions package matches
+    the reviewed retail package or one of our known branch-only patched states.
+    This keeps compatibility permissive without blind archive writes.
+    """
+    big_path = game_root / spec.big_name
+    bh_path = game_root / spec.bh_name
+    if not big_path.is_file() or not bh_path.is_file():
+        raise FileNotFoundError(f"{spec.big_name}/{spec.bh_name} not found under {game_root}")
+
+    bh = bh_path.read_bytes()
+    records = parse_bh(bh)
+    big_size = big_path.stat().st_size
+
+    # Fast path: reviewed record index/identity.  The compressed size may have
+    # changed after our own patch, so path hash + readable bounds are enough to
+    # inspect it before classifying the payload.
+    if spec.expected_index < len(records):
+        record = records[spec.expected_index]
+        if (
+            record.path_hash == spec.expected_hash
+            and record.size > 0
+            and record.offset >= 0
+            and record.offset + record.size <= big_size
+        ):
+            with big_path.open("rb") as handle:
+                handle.seek(record.offset)
+                payload = handle.read(record.size)
+            try:
+                info = inspect_helper_payload(payload, spec)
+                if info["is_reviewed_retail_decoded"] or info["detected_modes"]:
+                    return record, info, "reviewed-record"
+            except Exception:
+                pass
+
+    candidates: list[tuple[BhRecord, dict]] = []
+    with big_path.open("rb") as handle:
+        for record in records:
+            # helperFunctions is small; broad bounds avoid reading huge assets
+            # while still tolerating different compression ratios.
+            if record.size < 128 or record.size > 512_000:
+                continue
+            if record.offset < 0 or record.offset + record.size > big_size:
+                continue
+            handle.seek(record.offset)
+            payload = handle.read(record.size)
+            if len(payload) != record.size or not payload.startswith(CHUNKZIP_MAGIC):
+                continue
+            try:
+                info = inspect_helper_payload(payload, spec)
+            except Exception:
+                continue
+            if info["is_reviewed_retail_decoded"] or info["detected_modes"]:
+                candidates.append((record, info))
+
+    if not candidates:
+        raise ValueError(
+            f"{spec.name}.bh has {len(records)} records and no compatible helperFunctions payload was found"
+        )
+    if len(candidates) > 1:
+        exact_stored = [item for item in candidates if item[1]["is_reviewed_retail_stored"]]
+        if len(exact_stored) == 1:
+            candidates = exact_stored
+        else:
+            indexes = ",".join(str(item[0].index) for item in candidates[:12])
+            raise ValueError(
+                f"{spec.name}.bh contains multiple compatible helperFunctions candidates ({indexes}); refusing an ambiguous write"
+            )
+    record, info = candidates[0]
+    return record, info, "content-scan"
 
 
 def decode_chunkzip(payload: bytes) -> tuple[bytes, dict]:
@@ -347,12 +462,14 @@ def apply_apt_patches(decoded: bytes, mode: str) -> tuple[bytes, list[dict]]:
 
 
 def verify_original_payload(payload: bytes, spec: ArchiveSpec) -> tuple[bytes, dict]:
+    """Verify the reviewed *decoded* retail helperFunctions package.
+
+    Alternate distributions sometimes recompress an otherwise identical
+    chunkzip payload, so the stored SHA can legitimately differ while the
+    decoded package is still exactly the reviewed FIFA 14 content.  The decoded
+    SHA remains a hard safety boundary before any branch bytes are changed.
+    """
     stored_hash = sha256_bytes(payload)
-    if stored_hash != spec.expected_stored_sha256:
-        raise ValueError(
-            f"{spec.name} helperFunctions stored payload mismatch: "
-            f"{stored_hash} != {spec.expected_stored_sha256}"
-        )
     decoded, chunk_info = decode_chunkzip(payload)
     decoded_hash = sha256_bytes(decoded)
     if decoded_hash != spec.expected_decoded_sha256:
@@ -363,6 +480,7 @@ def verify_original_payload(payload: bytes, spec: ArchiveSpec) -> tuple[bytes, d
     apt_entry = get_apt_entry(decoded)
     return decoded, {
         "stored_sha256": stored_hash,
+        "stored_sha256_matches_reviewed": stored_hash == spec.expected_stored_sha256,
         "decoded_sha256": decoded_hash,
         "apt_sha256": sha256_bytes(decoded[apt_entry.offset : apt_entry.offset + apt_entry.size]),
         "chunkzip": chunk_info,
@@ -434,7 +552,12 @@ def ensure_targeted_backup(game_root: Path, state_dir: Path, spec: ArchiveSpec) 
         raise ValueError(f"incomplete {spec.name} backup set under {record_backup.parent}")
     if all(present):
         original_bh = bh_backup.read_bytes()
-        record = get_record(original_bh, spec)
+        records = parse_bh(original_bh)
+        metadata = json.loads(metadata_backup.read_text(encoding="utf-8"))
+        index = int(metadata.get("record", {}).get("index", -1))
+        if index < 0 or index >= len(records):
+            raise ValueError(f"{spec.name} backup metadata record index {index} is invalid")
+        record = records[index]
         original_payload = record_backup.read_bytes()
         verify_original_payload(original_payload, spec)
         return original_payload, original_bh, record
@@ -444,12 +567,12 @@ def ensure_targeted_backup(game_root: Path, state_dir: Path, spec: ArchiveSpec) 
     if not big_path.is_file() or not bh_path.is_file():
         raise FileNotFoundError(f"{spec.big_name}/{spec.bh_name} not found under {game_root}")
     original_bh = bh_path.read_bytes()
-    record = get_record(original_bh, spec)
-    with big_path.open("rb") as handle:
-        handle.seek(record.offset)
-        original_payload = handle.read(record.size)
-    if len(original_payload) != record.size:
-        raise ValueError(f"short read from {spec.big_name}")
+    record, resolved, resolution = resolve_compatible_record(game_root, spec)
+    if not resolved["is_reviewed_retail_decoded"]:
+        raise ValueError(
+            f"{spec.name} helperFunctions is already modified ({resolved['detected_modes']}) but no original backup exists"
+        )
+    original_payload = resolved["payload"]
     identity = verify_original_payload(original_payload, spec)[1]
     record_backup.parent.mkdir(parents=True, exist_ok=True)
     atomic_write(record_backup, original_payload)
@@ -458,6 +581,7 @@ def ensure_targeted_backup(game_root: Path, state_dir: Path, spec: ArchiveSpec) 
         "archive": spec.name,
         "big_path": str(big_path),
         "bh_path": str(bh_path),
+        "resolution": resolution,
         "record": {
             "index": record.index,
             "offset": record.offset,
@@ -486,72 +610,27 @@ def parse_archive_selection(value: str) -> list[ArchiveSpec]:
 
 
 def inspect_installed_archive(game_root: Path, spec: ArchiveSpec) -> dict:
-    """Inspect the live archive without requiring it to be the retail original.
-
-    Older copies of this project may already have applied the exact branch-only
-    payload. In that state the BH record length is expected to differ from the
-    retail compressed length even though the record index, offset and path hash
-    are unchanged. Treating that normal patched length as corruption made fresh
-    capture bundles fail before they could reuse the known-good route.
-    """
-    big_path = game_root / spec.big_name
-    bh_path = game_root / spec.bh_name
-    if not big_path.is_file() or not bh_path.is_file():
-        raise FileNotFoundError(f"{spec.big_name}/{spec.bh_name} not found under {game_root}")
-
-    records = parse_bh(bh_path.read_bytes())
-    if spec.expected_index >= len(records):
-        raise ValueError(f"{spec.name}.bh does not contain record {spec.expected_index}")
-    record = records[spec.expected_index]
-    if record.path_hash != spec.expected_hash:
-        actual = record.path_hash
-        expected = spec.expected_hash
-        raise ValueError(
-            f"{spec.name} helperFunctions path hash changed: actual={actual:016X}, expected={expected:016X}"
-        )
-    if record.offset + record.size > big_path.stat().st_size:
-        raise ValueError(
-            f"{spec.name} helperFunctions record lies outside {spec.big_name}: "
-            f"offset={record.offset}, size={record.size}"
-        )
-
-    with big_path.open("rb") as handle:
-        handle.seek(record.offset)
-        payload = handle.read(record.size)
-    if len(payload) != record.size:
-        raise ValueError(f"short read from {spec.big_name}")
-
-    decoded, chunk_info = decode_chunkzip(payload)
-    apt_entry = get_apt_entry(decoded)
-    apt = decoded[apt_entry.offset : apt_entry.offset + apt_entry.size]
-    modes = [
-        candidate
-        for candidate, changes in PATCHES.items()
-        if all(
-            apt[offset : offset + len(after)] == after
-            for offset, _before, after, _description in changes
-        )
-    ]
+    """Inspect helperFunctions using exact identity first, then safe content scan."""
+    record, info, resolution = resolve_compatible_record(game_root, spec)
     retail_original = (
-        record.offset == spec.expected_offset
+        record.index == spec.expected_index
+        and record.offset == spec.expected_offset
         and record.size == spec.expected_size
-        and sha256_bytes(payload) == spec.expected_stored_sha256
-        and sha256_bytes(decoded) == spec.expected_decoded_sha256
+        and record.path_hash == spec.expected_hash
+        and info["is_reviewed_retail_stored"]
+        and info["is_reviewed_retail_decoded"]
     )
-    if record.offset != spec.expected_offset and not modes:
-        raise ValueError(
-            f"{spec.name} helperFunctions record moved to {record.offset}, but the payload is not a known branch-only installation"
-        )
     return {
         "record": record,
-        "payload": payload,
-        "decoded": decoded,
+        "payload": info["payload"],
+        "decoded": info["decoded"],
         "retail_original": retail_original,
-        "detected_modes": modes,
-        "payload_sha256": sha256_bytes(payload),
-        "decoded_sha256": sha256_bytes(decoded),
-        "apt_sha256": sha256_bytes(apt),
-        "chunkzip": chunk_info,
+        "detected_modes": info["detected_modes"],
+        "payload_sha256": info["stored_sha256"],
+        "decoded_sha256": info["decoded_sha256"],
+        "apt_sha256": info["apt_sha256"],
+        "chunkzip": info["chunkzip"],
+        "resolution": resolution,
     }
 
 
@@ -663,12 +742,17 @@ def patch_archives(game_root: Path, state_dir: Path, specs: list[ArchiveSpec], m
 
 
 def restore_one_archive(game_root: Path, state_dir: Path, spec: ArchiveSpec) -> dict:
-    record_backup, bh_backup, _metadata_backup = backup_paths(state_dir, spec)
-    if not record_backup.is_file() or not bh_backup.is_file():
+    record_backup, bh_backup, metadata_backup = backup_paths(state_dir, spec)
+    if not record_backup.is_file() or not bh_backup.is_file() or not metadata_backup.is_file():
         raise FileNotFoundError(f"no targeted backup exists for {spec.name}")
     original_payload = record_backup.read_bytes()
     original_bh = bh_backup.read_bytes()
-    record = get_record(original_bh, spec)
+    records = parse_bh(original_bh)
+    metadata = json.loads(metadata_backup.read_text(encoding="utf-8"))
+    index = int(metadata.get("record", {}).get("index", -1))
+    if index < 0 or index >= len(records):
+        raise ValueError(f"{spec.name} backup metadata record index {index} is invalid")
+    record = records[index]
     verify_original_payload(original_payload, spec)
     big_path = game_root / spec.big_name
     bh_path = game_root / spec.bh_name
@@ -677,6 +761,7 @@ def restore_one_archive(game_root: Path, state_dir: Path, spec: ArchiveSpec) -> 
     return {
         "archive": spec.name,
         "restored": True,
+        "record_index": record.index,
         "record_size": record.size,
         "payload_sha256": sha256_bytes(original_payload),
         "backups_preserved": True,
@@ -694,38 +779,15 @@ def restore_archives(game_root: Path, state_dir: Path, specs: list[ArchiveSpec])
 
 
 def verify_one_archive(game_root: Path, spec: ArchiveSpec) -> dict:
-    big_path = game_root / spec.big_name
-    bh_path = game_root / spec.bh_name
-    bh = bh_path.read_bytes()
-    records = parse_bh(bh)
-    if spec.expected_index >= len(records):
-        raise ValueError(f"{spec.name}.bh does not contain record {spec.expected_index}")
-    record = records[spec.expected_index]
-    if record.path_hash != spec.expected_hash:
-        raise ValueError(f"{spec.name} record path hash changed")
-    if record.offset + record.size > big_path.stat().st_size:
-        raise ValueError(f"{spec.name} record lies outside {spec.big_name}")
-    with big_path.open("rb") as handle:
-        handle.seek(record.offset)
-        payload = handle.read(record.size)
-    decoded, info = decode_chunkzip(payload)
-    apt_entry = get_apt_entry(decoded)
-    apt = decoded[apt_entry.offset : apt_entry.offset + apt_entry.size]
-    modes = [
-        mode
-        for mode, changes in PATCHES.items()
-        if all(apt[offset : offset + len(after)] == after for offset, _before, after, _desc in changes)
-    ]
+    record, info, resolution = resolve_compatible_record(game_root, spec)
     original = (
-        record.offset == spec.expected_offset
+        record.index == spec.expected_index
+        and record.offset == spec.expected_offset
         and record.size == spec.expected_size
-        and sha256_bytes(payload) == spec.expected_stored_sha256
-        and sha256_bytes(decoded) == spec.expected_decoded_sha256
+        and record.path_hash == spec.expected_hash
+        and info["is_reviewed_retail_stored"]
+        and info["is_reviewed_retail_decoded"]
     )
-    if record.offset != spec.expected_offset and not modes:
-        raise ValueError(
-            f"{spec.name} record is relocated but does not contain a known branch-only payload"
-        )
     return {
         "archive": spec.name,
         "record": {
@@ -734,12 +796,13 @@ def verify_one_archive(game_root: Path, spec: ArchiveSpec) -> dict:
             "offset": record.offset,
             "size": record.size,
         },
-        "payload_sha256": sha256_bytes(payload),
-        "decoded_sha256": sha256_bytes(decoded),
-        "apt_sha256": sha256_bytes(apt),
+        "resolution": resolution,
+        "payload_sha256": info["stored_sha256"],
+        "decoded_sha256": info["decoded_sha256"],
+        "apt_sha256": info["apt_sha256"],
         "retail_original": original,
-        "detected_modes": modes,
-        "chunkzip": info,
+        "detected_modes": info["detected_modes"],
+        "chunkzip": info["chunkzip"],
     }
 
 
