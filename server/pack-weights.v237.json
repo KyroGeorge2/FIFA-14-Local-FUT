@@ -1,119 +1,29 @@
 {
   "schema": "fifa14-v2258-accessible-all-special-pack-weights",
-  "note": "Accessible local-FUT tuning: every supported base player remains eligible; special families are chosen explicitly so IF/TOTS/TOTY/MOTM/other normal-mode specials all appear, with a hard maximum of two specials per pack.",
+  "note": "Public Local FUT tuning: every supported base player and normal-mode special family remains obtainable, but elite ratings and multi-special packs are less common than the earlier testing-friendly weights.",
   "ratingBands": [
-    {
-      "min": 75,
-      "max": 79,
-      "weight": 72.0
-    },
-    {
-      "min": 80,
-      "max": 83,
-      "weight": 20.0
-    },
-    {
-      "min": 84,
-      "max": 86,
-      "weight": 6.0
-    },
-    {
-      "min": 87,
-      "max": 89,
-      "weight": 1.7
-    },
-    {
-      "min": 90,
-      "max": 99,
-      "weight": 0.3
-    }
+    {"min": 75, "max": 79, "weight": 74.5},
+    {"min": 80, "max": 83, "weight": 19.5},
+    {"min": 84, "max": 86, "weight": 4.7},
+    {"min": 87, "max": 89, "weight": 1.15},
+    {"min": 90, "max": 99, "weight": 0.15}
   ],
-  "rareSlotMultiplier": {
-    "84-86": 1.2,
-    "87-89": 1.45,
-    "90+": 1.8
-  },
-  "promoSlotMultiplier": {
-    "84-86": 1.3,
-    "87-89": 1.7,
-    "90+": 2.4
-  },
+  "rareSlotMultiplier": {"84-86": 1.15, "87-89": 1.3, "90+": 1.55},
+  "promoSlotMultiplier": {"84-86": 1.2, "87-89": 1.45, "90+": 1.85},
   "localTestStartingCoins": 100000000,
   "seed": "FIFA14-LOCAL-FUT-V24012",
-  "specialChancePerPlayer": {
-    "bronze": 0.0025,
-    "silver": 0.004,
-    "gold": 0.0075
-  },
-  "promoSpecialChanceMultiplier": 1.75,
+  "specialChancePerPlayer": {"bronze": 0.0015, "silver": 0.0025, "gold": 0.0045},
+  "promoSpecialChanceMultiplier": 1.5,
   "legendChancePerGoldPlayer": 0.0,
   "promoLegendChanceMultiplier": 1.5,
-  "regularPackMax90Plus": 2,
-  "specialChancePerPack": {
-    "1": 0.006,
-    "2": 0.012,
-    "3": 0.015,
-    "4": 0.03,
-    "5": 0.08,
-    "6": 0.16,
-    "101": 0.25,
-    "102": 0.35,
-    "103": 0.45,
-    "104": 0.6,
-    "105": 0.7,
-    "106": 0.0,
-    "107": 0.0
-  },
-  "legendChancePerPack": {
-    "1": 0.0,
-    "2": 0.0,
-    "3": 0.0,
-    "4": 0.0,
-    "5": 0.0,
-    "6": 0.0,
-    "101": 0.0,
-    "102": 0.0,
-    "103": 0.0,
-    "104": 0.0,
-    "105": 0.0,
-    "106": 0.0,
-    "107": 0.0
-  },
-  "secondSpecialChanceGivenFirst": {
-    "1": 0.0,
-    "2": 0.0,
-    "3": 0.0,
-    "4": 0.01,
-    "5": 0.01,
-    "6": 0.02,
-    "101": 0.025,
-    "102": 0.03,
-    "103": 0.035,
-    "104": 0.04,
-    "105": 0.05,
-    "106": 0.0,
-    "107": 0.0
-  },
+  "regularPackMax90Plus": 1,
+  "specialChancePerPack": {"1": 0.004, "2": 0.008, "3": 0.01, "4": 0.02, "5": 0.05, "6": 0.1, "101": 0.18, "102": 0.25, "103": 0.32, "104": 0.45, "105": 0.55, "106": 0.0, "107": 0.0},
+  "legendChancePerPack": {"1": 0.0, "2": 0.0, "3": 0.0, "4": 0.0, "5": 0.0, "6": 0.0, "101": 0.0, "102": 0.0, "103": 0.0, "104": 0.0, "105": 0.0, "106": 0.0, "107": 0.0},
+  "secondSpecialChanceGivenFirst": {"1": 0.0, "2": 0.0, "3": 0.0, "4": 0.005, "5": 0.005, "6": 0.01, "101": 0.015, "102": 0.02, "103": 0.025, "104": 0.03, "105": 0.04, "106": 0.0, "107": 0.0},
   "maxSpecialsPerPack": 2,
   "specialTypeWeights": {
-    "gold": {
-      "goldif": 42.0,
-      "goldblue": 28.0,
-      "motm": 14.0,
-      "toty": 8.0,
-      "green": 6.0,
-      "special": 2.0
-    },
-    "silver": {
-      "silverif": 70.0,
-      "silverblue": 25.0,
-      "motm": 4.0,
-      "green": 1.0
-    },
-    "bronze": {
-      "bronzeif": 75.0,
-      "bronzeblue": 24.0,
-      "motm": 1.0
-    }
+    "gold": {"goldif": 42.0, "goldblue": 28.0, "motm": 14.0, "toty": 8.0, "green": 6.0, "special": 2.0},
+    "silver": {"silverif": 70.0, "silverblue": 25.0, "motm": 4.0, "green": 1.0},
+    "bronze": {"bronzeif": 75.0, "bronzeblue": 24.0, "motm": 1.0}
   }
 }
