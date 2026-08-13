@@ -30,6 +30,10 @@ certs/
 state/
 dist/
 
+# Generated diagnostics output
+diagnostics-report.txt
+diagnostics-report.json
+
 # Temporary / backup files
 *.log
 *.tmp
