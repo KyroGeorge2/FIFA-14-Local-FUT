@@ -16,7 +16,8 @@ if errorlevel 1 (
   exit /b 1
 )
 
-if exist ".git\" (
+git rev-parse --git-dir >nul 2>nul
+if not errorlevel 1 (
   echo [INFO] This folder is already a Git repository.
 ) else (
   echo [1/3] Initialising repository...

@@ -15,7 +15,8 @@ if errorlevel 1 (
   exit /b 1
 )
 
-if not exist ".git\" (
+git rev-parse --git-dir >nul 2>nul
+if errorlevel 1 (
   echo [ERROR] This folder is not initialised yet.
   echo Run SETUP_GITHUB_REPO.cmd first.
   pause
@@ -41,13 +42,17 @@ if errorlevel 1 (
 )
 if errorlevel 1 goto :failed
 
-git branch -M main
-if errorlevel 1 goto :failed
+for /f "delims=" %%B in ('git branch --show-current 2^>nul') do set "CURRENT_BRANCH=%%B"
+
+if "%CURRENT_BRANCH%"=="" (
+  echo [ERROR] Unable to determine the current branch.
+  goto :failed
+)
 
 echo.
-echo Pushing main branch...
+echo Pushing branch '%CURRENT_BRANCH%' to GitHub as 'main'...
 echo Git for Windows may open a browser window for GitHub sign-in.
-git push -u origin main
+git push -u origin "HEAD:main"
 if errorlevel 1 goto :failed
 
 echo.
