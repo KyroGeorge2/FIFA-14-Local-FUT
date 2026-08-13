@@ -3,6 +3,19 @@ Set-StrictMode -Version Latest
 $projectDir = Split-Path -Parent $PSScriptRoot
 Set-Location $projectDir
 
+# Ensure the small production runtime compatibility layer under server\ is
+# available to every Python process launched from this entry point, including
+# the elevated relaunch below. Verifier scripts opt themselves out of the
+# runtime-only adapter inside sitecustomize.py.
+$runtimeServerPath = Join-Path $projectDir "server"
+$pythonPathParts = @()
+if (-not [string]::IsNullOrWhiteSpace($env:PYTHONPATH)) {
+    $pythonPathParts = @($env:PYTHONPATH -split ';' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+}
+if ($pythonPathParts -notcontains $runtimeServerPath) {
+    $env:PYTHONPATH = (($runtimeServerPath) + @($pythonPathParts)) -join ';'
+}
+
 function Test-IsAdministrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)
