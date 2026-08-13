@@ -1608,7 +1608,7 @@ class BlazeProbe(socketserver.BaseRequestHandler):
     def handle(self) -> None:
         # FIFA may perform title-specific setup between requests.  The old
         # 15-second timeout was itself producing the generic server-down error.
-        self.request.settimeout(120)
+        self.request.settimeout(300)
         client_locale = 0x656E5553
         origin_variant = "reference-local"
         origin_login_attempts = 0
