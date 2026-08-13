@@ -2264,7 +2264,7 @@ class LocalIdentityStore:
     @staticmethod
     def _weighted_special_player(
         rng: random.Random, *, quality: str, excluded_resources: set[int] | None = None,
-        max_rating: int | None = None
+        excluded_assets: set[int] | None = None, max_rating: int | None = None
     ) -> dict[str, Any] | None:
         """Draw a normal-mode special by *card family* first, then by rating.
 
@@ -2274,13 +2274,20 @@ class LocalIdentityStore:
         blue, orange, green and TOTY rows were technically eligible. 2.25.8
         gives each family an explicit share and only then chooses a card inside
         that family. This preserves the hard two-special-per-pack cap.
+
+        ``excluded_assets`` rejects specials whose footballer is already in the
+        pack. A special and its base card are the same player: they share an
+        ``assetId`` but carry different ``resourceId`` values, so filtering on
+        the resource alone still admits a second card for the same footballer.
         """
         excluded_resources = excluded_resources or set()
+        excluded_assets = excluded_assets or set()
         quality_key = str(quality).lower()
         candidates = [
             player for player in NORMAL_SPECIAL_PLAYER_CATALOG
             if str(player.get("quality", LocalIdentityStore._quality_for_rating(int(player.get("rating", 0))))) == quality_key
             and int(player.get("resourceId", 0)) not in excluded_resources
+            and int(player.get("assetId", -1)) not in excluded_assets
             and (max_rating is None or int(player.get("rating", 0)) <= int(max_rating))
         ]
         if not candidates:
@@ -2324,12 +2331,15 @@ class LocalIdentityStore:
 
     @staticmethod
     def _weighted_legend(
-        rng: random.Random, *, excluded_resources: set[int] | None = None, max_rating: int | None = None
+        rng: random.Random, *, excluded_resources: set[int] | None = None,
+        excluded_assets: set[int] | None = None, max_rating: int | None = None
     ) -> dict[str, Any] | None:
         excluded_resources = excluded_resources or set()
+        excluded_assets = excluded_assets or set()
         candidates = [
             p for p in LEGEND_PLAYER_CATALOG
             if int(p.get("resourceId", 0)) not in excluded_resources
+            and int(p.get("assetId", -1)) not in excluded_assets
             and (max_rating is None or int(p.get("rating", 0)) <= int(max_rating))
         ]
         return rng.choice(candidates) if candidates else None
@@ -2805,12 +2815,13 @@ class LocalIdentityStore:
 
                 if legend_target == source_ordinal:
                     player = self._weighted_legend(
-                        rng, excluded_resources=used_resources,
+                        rng, excluded_resources=used_resources, excluded_assets=used_assets,
                         max_rating=89 if elite_count >= max_elites else None,
                     )
                 elif source_ordinal in special_targets:
                     player = self._weighted_special_player(
                         rng, quality=quality, excluded_resources=used_resources,
+                        excluded_assets=used_assets,
                         max_rating=89 if elite_count >= max_elites else None,
                     )
                 if player is None:
@@ -2819,9 +2830,12 @@ class LocalIdentityStore:
                         excluded_assets=used_assets, max_rating=base_max_rating,
                     )
                 resource = int(player.get("resourceId", player.get("assetId", 0)))
-                # Avoid the same exact card twice in one pack.
+                asset = int(player.get("assetId", 0))
+                # Avoid the same exact card twice in one pack, and never hand out
+                # two cards for the same footballer: the weighted draws can fall
+                # back to an unfiltered pool once every candidate is excluded.
                 attempts = 0
-                while resource in used_resources and attempts < 20:
+                while (resource in used_resources or asset in used_assets) and attempts < 20:
                     attempts += 1
                     fallback_max = 89 if elite_count >= max_elites else None
                     player = self._weighted_player(
@@ -2829,7 +2843,8 @@ class LocalIdentityStore:
                         excluded_assets=used_assets, max_rating=fallback_max,
                     )
                     resource = int(player.get("resourceId", player.get("assetId", 0)))
-                used_assets.add(int(player.get("assetId", 0)))
+                    asset = int(player.get("assetId", 0))
+                used_assets.add(asset)
                 used_resources.add(resource)
                 if int(player.get("rating", 0)) >= 90:
                     elite_count += 1

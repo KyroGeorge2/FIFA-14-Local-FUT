@@ -11,6 +11,13 @@ Thanks for helping improve FIFA 14 Local FUT.
 
   `python -m compileall -q server tools`
 
+- Run the test suite when possible. It uses the bundled catalogues and a
+  temporary database, so no FIFA 14 installation is required:
+
+  `python -m pip install -r requirements-dev.txt`
+
+  `python -m pytest tests -q`
+
 - For gameplay/runtime changes, include the exact test performed and whether the user remained connected to FUT afterwards.
 
 ## Bug reports
