@@ -9,6 +9,7 @@ they need no FIFA 14 installation.
 """
 from __future__ import annotations
 
+import json
 import random
 import sqlite3
 import sys
@@ -184,6 +185,74 @@ def test_generated_pack_never_repeats_a_footballer(
             assert not repeated, (
                 f"pack type {pack_type} pack {pack_id} repeated footballer(s) {repeated}"
             )
+    finally:
+        connection.close()
+
+
+def test_repair_rebuilds_a_stale_pack_that_repeats_a_footballer(
+    store: LocalIdentityStore,
+) -> None:
+    """An unopened pack generated before this fix must not survive the upgrade.
+
+    Such a pack still satisfies PACK_FIDELITY_SCHEMA, so the repair pass would
+    keep it and hand out the duplicate anyway the next time it is opened.
+    """
+    import local_identity
+
+    pack_type = SPECIAL_HEAVY_PACK_TYPES[0]
+    definition = PACK_DEFINITIONS[pack_type]
+    connection = store._connect()
+    try:
+        persona_id = int(store._identity(connection)["persona_id"])
+        pack_id = 4242
+        connection.execute(
+            "INSERT INTO packs (pack_id, persona_id, pack_type, pack_name, unopened, created_at) "
+            "VALUES (?,?,?,?,1,0)",
+            (pack_id, persona_id, pack_type, str(definition.get("name", "test pack"))),
+        )
+        items = store._generate_pack_contents_locked(
+            connection, pack_id=pack_id, definition=definition
+        )
+        connection.commit()
+
+        players = _players(items)
+        assert len(players) >= 2
+
+        # Forge the pre-fix state: two cards, one footballer.
+        duplicated_asset = int(players[0]["assetId"])
+        rows = connection.execute(
+            "SELECT ordinal, payload FROM pack_contents WHERE pack_id=? ORDER BY ordinal",
+            (pack_id,),
+        ).fetchall()
+        target = next(
+            row for row in rows
+            if str(json.loads(row["payload"]).get("itemType", "")).lower() == PLAYER_ITEM_TYPE
+            and int(json.loads(row["payload"])["assetId"]) != duplicated_asset
+        )
+        forged = json.loads(target["payload"])
+        forged["assetId"] = duplicated_asset
+        assert forged.get("localPackSchema") == local_identity.PACK_FIDELITY_SCHEMA
+        connection.execute(
+            "UPDATE pack_contents SET payload=? WHERE pack_id=? AND ordinal=?",
+            (json.dumps(forged, separators=(",", ":")), pack_id, int(target["ordinal"])),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    result = store.repair_unopened_pack_contents()
+    assert result["packsRebuilt"] >= 1, "the stale duplicate pack was not rebuilt"
+
+    connection = store._connect()
+    try:
+        rows = connection.execute(
+            "SELECT payload FROM pack_contents WHERE pack_id=?", (4242,)
+        ).fetchall()
+        assets = [
+            int(json.loads(r["payload"])["assetId"]) for r in rows
+            if str(json.loads(r["payload"]).get("itemType", "")).lower() == PLAYER_ITEM_TYPE
+        ]
+        assert len(assets) == len(set(assets)), "the rebuilt pack still repeats a footballer"
     finally:
         connection.close()
 

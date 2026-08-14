@@ -2143,6 +2143,7 @@ class LocalIdentityStore:
                     "SELECT payload FROM pack_contents WHERE pack_id = ? ORDER BY ordinal", (pack_id,)
                 ).fetchall()
                 valid = len(item_rows) == expected_count
+                player_assets: list[int] = []
                 if valid:
                     for item_row in item_rows:
                         try:
@@ -2159,6 +2160,13 @@ class LocalIdentityStore:
                         if bool(payload.get("untradeable", True)) or not bool(payload.get("tradeable", False)):
                             valid = False
                             break
+                        if str(payload.get("itemType", "")).lower() == PLAYER_ITEM_TYPE:
+                            player_assets.append(int(payload.get("assetId", 0)))
+                # A pack generated before the duplicate-footballer fix still
+                # satisfies the fidelity schema, so the schema alone would keep
+                # it. Rebuild it instead of handing out the same player twice.
+                if valid and len(player_assets) != len(set(player_assets)):
+                    valid = False
                 if valid:
                     continue
                 connection.execute("DELETE FROM pack_contents WHERE pack_id = ?", (pack_id,))
