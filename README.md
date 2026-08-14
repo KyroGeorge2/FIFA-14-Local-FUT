@@ -38,7 +38,7 @@ reports, and prints what to do about each one:
 
 - Python version, and whether `cryptography` and `frida` are installed
 - whether OpenSSL can be found, which the legacy certificates require
-- whether ports 42127, 42128, 8080, 8099 and 44125 are free
+- whether the ports the launcher binds are free: 42129, 42128, 8080, 8099, 8306, 44125
 - whether the process is elevated, which Frida injection needs
 - whether the FIFA 14 folder resolves and contains the expected files
 - whether the bundled catalogues are complete and the server modules import

@@ -41,20 +41,32 @@ _STATUS_MARK = {OK: "[ ok ]", WARN: "[warn]", FAIL: "[FAIL]"}
 
 MINIMUM_PYTHON = (3, 10)
 
-# Defaults from server/probe.py. The launcher starts every one of these.
+# The set the documented launcher actually binds, from the $ports list and the
+# --*-port arguments in tools/trace_fifa14_fut_hub_store.ps1. These are not the
+# argparse defaults in server/probe.py: the launcher passes --blaze-port 42129
+# and --dynamic-http-port 8306, so checking probe.py's defaults would both miss
+# a port that must be free and flag one that is never used.
 REQUIRED_PORTS = {
-    42127: "Blaze redirector",
+    42129: "Blaze redirector",
     42128: "Blaze main",
     8080: "HTTP / client config",
     8099: "FUT HTTP API",
+    8306: "FUT dynamic HTTP",
     44125: "GOSCA (TLS)",
 }
-OPTIONAL_PORTS = {3216: "Origin Core / LSX probe (only with --enable-lsx-probe)"}
+OPTIONAL_PORTS = {
+    42127: "Blaze redirector (probe.py default, only when launched by hand)",
+    3216: "Origin Core / LSX probe (only with --enable-lsx-probe)",
+}
 
 REQUIRED_GAME_FILES = ("fifa14.exe",)
 EXPECTED_GAME_FILES = ("CardsDLLzf.dll", "powdllzf.dll")
-EXPECTED_ARCHIVES = ("data0.big", "data0.bh", "data1.bh")
-OPTIONAL_ARCHIVES = ("patch.big", "patch.bh", "cards0.big", "cards0.bh")
+# The patchers read these straight out of the Game folder -- see
+# tools/patch_fifa14_fut_dynamic_route.py (game_root / "data1.bh") and
+# tools/patch_fifa14_fcc_login1_popup.py (game_root / "cards0.bh"). There is no
+# data/ subdirectory in the layout they expect.
+EXPECTED_ARCHIVES = ("data1.big", "data1.bh", "cards0.big", "cards0.bh")
+OPTIONAL_ARCHIVES = ("patch.big", "patch.bh", "data0.big", "data0.bh")
 
 # Catalogues server/local_identity.py loads at import time. A truncated or
 # half-downloaded release breaks these before any useful error is printed.
@@ -74,8 +86,12 @@ AUTODETECT_CANDIDATES = (
     r"C:\Program Files (x86)\Origin Games\FIFA 14\Game",
     r"C:\Program Files\Origin Games\FIFA 14\Game",
 )
+# Must stay identical to Get-Fifa14AutoDetectCandidates in tools/common.ps1,
+# otherwise this report can say "not found" for an install the launcher starts
+# from happily. test_diagnostics.py asserts they match.
 AUTODETECT_RELATIVE = (
     r"EA Games\FIFA 14\Game",
+    r"Games\FIFA 14\Game",
     r"Origin Games\FIFA 14\Game",
     r"SteamLibrary\steamapps\common\FIFA 14\Game",
     r"Program Files\EA Games\FIFA 14\Game",
@@ -214,8 +230,18 @@ def find_openssl() -> Path | None:
     found = which("openssl")
     if found:
         return Path(found)
+    local_programs = (
+        str(Path(os.environ["LOCALAPPDATA"]) / "Programs")
+        if os.environ.get("LOCALAPPDATA") else None
+    )
     candidates: list[str] = []
-    for base in filter(None, (os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)"))):
+    for base in filter(None, (
+        os.environ.get("ProgramFiles"),
+        os.environ.get("ProgramFiles(x86)"),
+        # Git for Windows installed per-user, which is the layout a non-admin
+        # install produces. probe.py and install_prerequisites.ps1 both use it.
+        local_programs,
+    )):
         candidates.extend([
             str(Path(base) / "Git" / "mingw64" / "bin" / "openssl.exe"),
             str(Path(base) / "Git" / "usr" / "bin" / "openssl.exe"),
@@ -268,6 +294,38 @@ def check_ports() -> list[Check]:
     return checks
 
 
+DRIVE_TYPE_CDROM = 5
+
+
+def ready_drives() -> list[str]:
+    """Mounted drive roots, skipping optical drives.
+
+    The equivalent of [IO.DriveInfo]::GetDrives() with an IsReady filter in
+    tools/common.ps1. Probing an empty optical drive can block, so it is left
+    out rather than walked.
+    """
+    if platform.system() != "Windows":
+        return []
+    try:
+        mask = ctypes.windll.kernel32.GetLogicalDrives()
+        get_type = ctypes.windll.kernel32.GetDriveTypeW
+    except Exception:  # pragma: no cover - defensive
+        return []
+
+    roots: list[str] = []
+    for index in range(26):
+        if not mask & (1 << index):
+            continue
+        root = f"{chr(ord('A') + index)}:\\"
+        try:
+            if get_type(ctypes.c_wchar_p(root)) == DRIVE_TYPE_CDROM:
+                continue
+        except Exception:  # pragma: no cover - defensive
+            continue
+        roots.append(root)
+    return roots
+
+
 def resolve_game_root(explicit: str | None) -> tuple[Path | None, str]:
     """Resolve the game folder the same way tools/common.ps1 does."""
     if explicit:
@@ -289,9 +347,8 @@ def resolve_game_root(explicit: str | None) -> tuple[Path | None, str]:
         return Path(env_root), "FIFA14_GAME_ROOT"
 
     candidates = list(AUTODETECT_CANDIDATES)
-    for drive in (f"{letter}:\\" for letter in "CDEFGHIJKL"):
-        if Path(drive).exists():
-            candidates.extend(str(Path(drive) / relative) for relative in AUTODETECT_RELATIVE)
+    for drive in ready_drives():
+        candidates.extend(str(Path(drive) / relative) for relative in AUTODETECT_RELATIVE)
     for candidate in candidates:
         if (Path(candidate) / "fifa14.exe").is_file():
             return Path(candidate), "auto-detected"
@@ -338,9 +395,8 @@ def check_game(explicit: str | None) -> list[Check]:
                 "usually means an incomplete or non-standard installation.",
             ))
 
-    data_dir = root / "data"
     for name in EXPECTED_ARCHIVES:
-        target = data_dir / name
+        target = root / name
         checks.append(
             Check(f"Archive: {name}", OK, "present") if target.is_file()
             else Check(
@@ -349,7 +405,7 @@ def check_game(explicit: str | None) -> list[Check]:
                 "to compatibility mode and some fixes are skipped.",
             )
         )
-    present_optional = [n for n in OPTIONAL_ARCHIVES if (data_dir / n).is_file()]
+    present_optional = [n for n in OPTIONAL_ARCHIVES if (root / n).is_file()]
     checks.append(Check(
         "Archive: optional patch/cards", OK,
         ", ".join(present_optional) if present_optional else "none present",

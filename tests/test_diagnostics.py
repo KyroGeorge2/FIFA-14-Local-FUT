@@ -6,6 +6,7 @@ tests exercise the pure decision logic directly rather than any happy path.
 from __future__ import annotations
 
 import json
+import re
 import socket
 import sys
 from pathlib import Path
@@ -180,6 +181,82 @@ def test_every_checked_catalogue_is_still_referenced_by_the_server() -> None:
     )
     for name in diag.REQUIRED_CATALOGUES:
         assert name in sources, f"{name} is checked but no longer loaded by the server"
+
+
+# --------------------------------------------------------------------------
+# Staying in sync with the launcher
+#
+# The failure mode this whole group guards against: the diagnostic drifts away
+# from what the launcher really does, and then confidently reports the wrong
+# thing -- a false all-clear, or a problem for a port nothing uses.
+# --------------------------------------------------------------------------
+
+def test_required_ports_match_the_launcher() -> None:
+    source = (TOOLS / "trace_fifa14_fut_hub_store.ps1").read_text(encoding="utf-8")
+    match = re.search(r"\$ports\s*=\s*@\(([^)]*)\)", source)
+    assert match, "could not find the launcher's $ports list"
+    launcher_ports = {int(value) for value in re.findall(r"\d+", match.group(1))}
+    assert set(diag.REQUIRED_PORTS) == launcher_ports, (
+        "the checked ports drifted from tools/trace_fifa14_fut_hub_store.ps1"
+    )
+
+
+def test_auto_detect_candidates_match_common_ps1() -> None:
+    source = (TOOLS / "common.ps1").read_text(encoding="utf-8")
+    block = re.search(
+        r"function Get-Fifa14AutoDetectCandidates.*?^}", source, re.S | re.M
+    )
+    assert block, "could not find Get-Fifa14AutoDetectCandidates"
+    quoted = set(re.findall(r'"([^"]*FIFA 14\\Game)"', block.group(0)))
+    relative = {path for path in quoted if not re.match(r"^[A-Za-z]:\\", path)}
+    assert relative == set(diag.AUTODETECT_RELATIVE), (
+        "the per-drive auto-detect paths drifted from tools/common.ps1"
+    )
+
+
+def test_openssl_lookup_covers_the_same_roots_as_probe() -> None:
+    """probe.py also probes a per-user Git install; missing it sends people
+    towards a pointless reinstall."""
+    source = (ROOT / "server" / "probe.py").read_text(encoding="utf-8")
+    block = re.search(r"def find_openssl\(.*?\n\n\n", source, re.S)
+    assert block, "could not find probe.find_openssl"
+    for marker in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"):
+        assert marker in block.group(0)
+        assert marker in (TOOLS / "diagnose_fifa14_local_fut.py").read_text(encoding="utf-8"), (
+            f"probe.py looks for OpenSSL under {marker} but the diagnostic does not"
+        )
+
+
+def test_archives_are_found_directly_in_the_game_root(tmp_path: Path) -> None:
+    """The patchers read the archives straight out of the Game folder.
+
+    Probing a data/ subdirectory reports a perfectly good installation as
+    missing its archives.
+    """
+    patcher = (TOOLS / "patch_fifa14_fut_dynamic_route.py").read_text(encoding="utf-8")
+    assert 'game_root / "data1.bh"' in patcher, "patcher layout changed; re-check this"
+
+    fake_root = tmp_path / "Game"
+    fake_root.mkdir()
+    (fake_root / "fifa14.exe").write_bytes(b"MZ")
+    for archive in diag.EXPECTED_ARCHIVES:
+        (fake_root / archive).write_bytes(b"ViV4")
+
+    by_name = {c.name: c for c in diag.check_game(str(fake_root))}
+    for archive in diag.EXPECTED_ARCHIVES:
+        check = by_name[f"Archive: {archive}"]
+        assert check.status == diag.OK, (
+            f"{archive} sits in the Game root but was reported as {check.status}"
+        )
+
+
+def test_expected_archives_are_named_by_the_patchers() -> None:
+    sources = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted(TOOLS.glob("*.py")) + sorted(TOOLS.glob("*.ps1"))
+    )
+    for archive in diag.EXPECTED_ARCHIVES:
+        assert archive in sources, f"{archive} is checked but no tool references it"
 
 
 # --------------------------------------------------------------------------
