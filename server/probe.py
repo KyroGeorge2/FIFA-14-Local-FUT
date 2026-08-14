@@ -3499,11 +3499,53 @@ class HttpProbe(BaseHTTPRequestHandler):
                 request = None
                 tail = path_without_query.rsplit("/", 1)[-1]
                 requested_id = int(tail) if tail.isdigit() else None
-                if effective_method in {"PUT", "POST"} and body:
-                    request = json.loads(body.decode("utf-8"))
-                    identity_store.save_squad(request, requested_id=requested_id)
+                is_active_route = path_without_query.startswith("/ut/game/fifa14/squad/active")
+                if effective_method == "DELETE" and requested_id is not None and hasattr(identity_store, "delete_squad"):
+                    identity_store.delete_squad(requested_id)
+                    response = identity_store.squad_list_compact() if hasattr(identity_store, "squad_list_compact") else identity_store.squad_list()
+                    response_name = "squad-deleted-list"
+                elif (
+                    is_active_route
+                    and requested_id is not None
+                    and effective_method in {"PUT", "POST"}
+                    and hasattr(identity_store, "set_active_squad")
+                ):
+                    # PUT /squad/active/{id} selects an existing squad without
+                    # rewriting any slot.
+                    identity_store.set_active_squad(requested_id)
                     response = identity_store.squad_detail(requested_id) if hasattr(identity_store, "squad_detail") else identity_store.active_squad_document()
-                    response_name = "squad-saved-detail-beta222"
+                    response_name = "squad-active-selected"
+                elif effective_method in {"PUT", "POST"} and body:
+                    request = json.loads(body.decode("utf-8"))
+                    body_squad_id = 0
+                    if isinstance(request, dict):
+                        try:
+                            body_squad_id = int(request.get("squadId") or request.get("id") or 0)
+                        except (TypeError, ValueError):
+                            body_squad_id = 0
+                    if (
+                        effective_method == "POST"
+                        and path_without_query == "/ut/game/fifa14/squad"
+                        and requested_id is None
+                        and body_squad_id <= 0
+                        and hasattr(identity_store, "create_squad")
+                    ):
+                        # The squad hub creates an empty squad and copies an
+                        # existing one through this exact request: no path id and
+                        # id 0 in the body.
+                        response = identity_store.create_squad(request)
+                        response_name = "squad-created-detail"
+                        emit("fut-squad-created",
+                             path=self.path,
+                             squad_id=int(response.get("id", 0)) if isinstance(response, dict) else 0,
+                             squad_name=response.get("squadName") if isinstance(response, dict) else None)
+                    else:
+                        identity_store.save_squad(request, requested_id=requested_id)
+                        # Echo back the squad that was written, which is not always
+                        # the active one once more than one squad exists.
+                        detail_id = requested_id if requested_id else (body_squad_id or None)
+                        response = identity_store.squad_detail(detail_id) if hasattr(identity_store, "squad_detail") else identity_store.active_squad_document()
+                        response_name = "squad-saved-detail-beta222"
                 elif path_without_query == "/ut/game/fifa14/squad/list":
                     response = identity_store.squad_list_compact() if hasattr(identity_store, "squad_list_compact") else identity_store.squad_list()
                     response_name = "squad-list-compact-beta222"
