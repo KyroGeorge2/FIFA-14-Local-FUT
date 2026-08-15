@@ -21,6 +21,7 @@ if str(SERVER) not in sys.path:
 
 import beta_identity as beta_identity_module
 from beta_identity import BetaIdentityStore
+from probe import HttpProbe
 
 
 def fail(message: str) -> None:
@@ -70,21 +71,29 @@ def main() -> int:
         if len(starters) < 11:
             fail(f"starter squad must be populated before this check: {first_ids}")
 
-        # 1. A write addressed to an unknown id creates a second squad under that
-        #    id instead of overwriting the first.
-        second_id = first_id + 1
+        # 1. A second squad is created through the retail create request, and a
+        #    write naming an id the persona does not own is ignored -- that write
+        #    is the editor holding a squad that was just deleted, and honouring it
+        #    resurrected the deleted squad.
         second_players = [
             {"index": index, "itemData": {"id": starters[index] if index < 11 else 0}, "kitNumber": 0}
             for index in range(23)
         ]
-        store.save_squad(
-            {"id": second_id, "squadName": "Second XI", "formation": "f433",
-             "chemistry": 42, "starRating": 55, "players": second_players},
-            requested_id=second_id,
+        created_second = store.create_squad(
+            {"id": 0, "squadName": "Second XI", "formation": "f433",
+             "chemistry": 42, "rating": 55, "starRating": 55, "manager": [], "players": second_players}
         )
+        second_id = int(created_second.get("id", 0))
         squads = store.squad_list()["squadList"]
-        if len(squads) != 2:
-            fail(f"saving an unknown squad id must create a second squad, got {[s['id'] for s in squads]}")
+        if len(squads) != 2 or second_id in (0, first_id):
+            fail(f"create must add a second squad, got {[s['id'] for s in squads]}")
+        ghost_id = max(int(row["id"]) for row in squads) + 50
+        store.save_squad(
+            {"id": ghost_id, "squadName": "Ghost XI", "formation": "f433", "players": second_players},
+            requested_id=ghost_id,
+        )
+        if len(store.squad_list()["squadList"]) != 2:
+            fail("a write naming an unknown squad id must be ignored, not create a squad")
         second = squad_by_id(store, second_id)
         if str(second.get("squadName")) != "Second XI" or str(second.get("formation")) != "f433":
             fail(f"second squad metadata was not persisted: {second}")
@@ -159,7 +168,37 @@ def main() -> int:
         if int(kept.get("chemistry", -1)) != 44 or int(kept.get("starRating", -1)) != 57:
             fail(f"a slots-only write must keep chemistry and rating: {kept}")
 
+        # 1e. A squad the user built is never auto-populated, however few players
+        #     it fields.  The active-squad recovery used to rebuild any short XI
+        #     from owned cards, which filled half-finished squads with whatever
+        #     the club happened to own.
+        short_players = [
+            {"index": index, "itemData": {"id": starters[index] if index < 4 else 0}, "kitNumber": 0}
+            for index in range(23)
+        ]
+        store.save_squad({"id": empty_id, "formation": "f442", "players": short_players}, requested_id=empty_id)
+        store.set_active_squad(empty_id)
+        filled = [value for value in item_ids(squad_by_id(store, empty_id)) if value > 0]
+        if len(filled) != 4:
+            fail(f"a user-built squad was auto-filled with unrequested players: {len(filled)} slots")
+        reopened_short = BetaIdentityStore(str(db), "existing")
+        filled = [value for value in item_ids(squad_by_id(reopened_short, empty_id)) if value > 0]
+        if len(filled) != 4:
+            fail(f"reopening the store auto-filled a user-built squad: {len(filled)} slots")
+        store = reopened_short
+        store.set_active_squad(second_id)
+
+        # 1f. Deleting a squad removes it for good: the editor's stale write for
+        #     that id must not bring it back.
         store.delete_squad(empty_id)
+        if any(int(row["id"]) == empty_id for row in store.squad_list()["squadList"]):
+            fail("delete_squad left the squad in the list")
+        store.save_squad(
+            {"id": empty_id, "squadName": "local", "formation": "f442", "players": short_players},
+            requested_id=empty_id,
+        )
+        if any(int(row["id"]) == empty_id for row in store.squad_list()["squadList"]):
+            fail("a stale editor write resurrected a deleted squad")
         store.delete_squad(copy_id)
         if len(store.squad_list()["squadList"]) != 2:
             fail("failed to return to the two-squad fixture")
@@ -207,6 +246,21 @@ def main() -> int:
         reopened = store.squad_list()["squadList"]
         if len(reopened) != 2 or int(store.squad_list_compact()["activeSquadId"]) != first_id:
             fail(f"multi-squad state did not survive a store reopen: {[s['id'] for s in reopened]}")
+
+        # 4b. FIFA 14 deletes a squad with GET /ut/delete/game/fifa14/squad/{id};
+        #     it has no DELETE verb.  Before this was routed, the request fell
+        #     through to the generic unmapped-route ack, so the client was told
+        #     the delete succeeded while the squad stayed in the list.
+        if HttpProbe._fut_squad_delete_id("/ut/delete/game/fifa14/squad/4") != 4:
+            fail("the tunnelled squad delete route is not recognized")
+        if HttpProbe._fut_squad_delete_id("/ut/delete/game/fifa14/squad/4?_=17") != 4:
+            fail("a query string must not hide the tunnelled squad delete")
+        for benign in (
+            "/ut/game/fifa14/squad/4", "/ut/delete/auth", "/ut/delete/game/fifa14/squad",
+            "/ut/delete/game/fifa14/squad/", "/ut/game/fifa14/squad/list",
+        ):
+            if HttpProbe._fut_squad_delete_id(benign) is not None:
+                fail(f"{benign} must not be treated as a squad delete")
 
         # 5. Deleting a squad frees its cards without destroying them, and the
         #    final remaining squad cannot be deleted.

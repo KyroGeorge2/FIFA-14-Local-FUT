@@ -154,12 +154,27 @@ def main() -> int:
         for event in events if event.get("kind") == "fut-squad-state-beta222"
     ]
 
+    # A delete the client sends somewhere other than /squad would be invisible in
+    # the filtered view above, so keep every non-GET request in the capture.
+    other_writes = [
+        summarize_request(event)
+        for event in events
+        if event.get("kind") == "http-probe"
+        and str(event.get("method", "")).upper() not in {"GET", "HEAD"}
+        and "/squad" not in str(event.get("path", "")).lower()
+    ]
     writes = [row for row in requests if str(row.get("method")) in {"PUT", "POST"} or row.get("methodOverride") in {"PUT", "POST"}]
     addressed = sorted({row["pathSquadId"] for row in requests if row["pathSquadId"]} |
                        {int(row.get("bodySquadId", 0)) for row in requests if row.get("bodySquadId")})
     written = sorted({row["pathSquadId"] for row in writes if row["pathSquadId"]} |
                      {int(row.get("bodySquadId", 0)) for row in writes if row.get("bodySquadId")})
-    deletes = [row for row in requests if str(row.get("method")) == "DELETE" or row.get("methodOverride") == "DELETE"]
+    # FIFA 14 has no DELETE verb: the squad hub deletes through
+    # GET /ut/delete/game/fifa14/squad/{id}, the same tunnel as /ut/delete/auth.
+    deletes = [
+        row for row in requests
+        if str(row.get("method")) == "DELETE" or row.get("methodOverride") == "DELETE"
+        or str(row.get("path", "")).lower().startswith("/ut/delete/")
+    ]
 
     findings: list[str] = []
     if not events:
@@ -168,19 +183,33 @@ def main() -> int:
         findings.append("The client made no /squad request at all in this capture.")
     else:
         if not writes:
-            findings.append("The client only read squads; it never sent a PUT/POST, so no squad could be created.")
-        if len(written) <= 1:
+            findings.append("The client only read or deleted squads in this capture; it sent no PUT/POST.")
+        elif len(written) <= 1:
             findings.append(
                 "Every squad write addressed the same id "
                 f"{written or '(none in path or body)'}: the in-game action is not asking the server for a new squad. "
-                "The server creates a squad only when a write names an unused id."
+                "Squads are created by POST /squad carrying id 0."
             )
         if writes and not any(row.get("pathSquadId") or row.get("bodySquadId") for row in writes):
             findings.append(
                 "Squad writes carry no id in the path or the body, so they always fall back to the active squad."
             )
-        if not deletes:
-            findings.append("No DELETE /squad/{id} was seen; squad deletion was not exercised.")
+        if deletes:
+            unhandled = [
+                response for response in responses
+                if str(response.get("path", "")).lower().startswith("/ut/delete/")
+                and str(response.get("responseName", "")).startswith("unmapped")
+            ]
+            findings.append(
+                f"Squad deletes seen for ids {sorted({row['pathSquadId'] for row in deletes if row['pathSquadId']})}."
+                + (" Some were answered by the generic unmapped-route ack and did nothing." if unhandled else "")
+            )
+        else:
+            findings.append(
+                "No squad delete was seen. If a squad was deleted in-game during this capture, "
+                "the client sent no delete request the server could act on -- check nonSquadWrites for "
+                "the request it sent instead."
+            )
     if not findings:
         findings.append(f"The client addressed multiple squad ids: {written}.")
 
@@ -194,6 +223,7 @@ def main() -> int:
         "recentRequests": requests[-max(arguments.limit, 0):],
         "recentResponses": responses[-max(arguments.limit, 0):],
         "recentSquadState": states[-max(arguments.limit, 0):],
+        "nonSquadWrites": other_writes[-max(arguments.limit, 0):],
         "persistedState": database_state(arguments.database),
     }, indent=2))
     return 0

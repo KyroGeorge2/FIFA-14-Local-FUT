@@ -2368,6 +2368,21 @@ class HttpProbe(BaseHTTPRequestHandler):
             )
         )
 
+    @staticmethod
+    def _fut_squad_delete_id(path: str) -> int | None:
+        """Return the squad id for FIFA 14's tunnelled squad delete, else None.
+
+        The client cannot issue a DELETE verb, so the squad hub deletes through
+        ``GET /ut/delete/game/fifa14/squad/{id}`` -- the same ``/ut/delete/``
+        tunnel it uses for logout at ``/ut/delete/auth``.  Without this the route
+        fell through to the generic unmapped-route acknowledgement, which is why
+        a deleted squad was acknowledged but never actually removed.
+        """
+        match = re.fullmatch(
+            r"/ut/delete/game/fifa14/squad/(\d+)", str(path).partition("?")[0], re.IGNORECASE
+        )
+        return int(match.group(1)) if match else None
+
     def _handle(self) -> None:
         length = int(self.headers.get("content-length", "0"))
         body = self.rfile.read(min(length, 1_048_576)) if length else b""
@@ -3489,6 +3504,29 @@ class HttpProbe(BaseHTTPRequestHandler):
             )
         elif (
             getattr(self.server, "probe_name", "http") == "fut-http"
+            and self._fut_squad_delete_id(path_without_query) is not None
+            and identity_store is not None
+        ):
+            squad_id = int(self._fut_squad_delete_id(path_without_query) or 0)
+            remaining: list[int] = []
+            if hasattr(identity_store, "delete_squad"):
+                listing = identity_store.delete_squad(squad_id)
+                if isinstance(listing, dict):
+                    remaining = [
+                        int(row.get("id", 0)) for row in listing.get("squadList", []) if isinstance(row, dict)
+                    ]
+            # The client re-reads /squad/list immediately afterwards, so keep the
+            # empty acknowledgement this route has always answered with rather
+            # than inventing a delete response contract.
+            payload = build_fut_json_payload({})
+            self.send_response(200)
+            self.send_header("content-type", "application/json; charset=utf-8")
+            self.send_header("cache-control", "no-store")
+            emit("fut-squad-deleted", path=self.path, squad_id=squad_id, remaining=remaining)
+            emit("fut-http-response", method=self.command, effective_method=effective_method,
+                 path=self.path, response_name="squad-deleted-ack", status=200, bytes=len(payload))
+        elif (
+            getattr(self.server, "probe_name", "http") == "fut-http"
             and (
                 path_without_query == "/ut/game/fifa14/squad"
                 or path_without_query.startswith("/ut/game/fifa14/squad/")
@@ -3504,6 +3542,8 @@ class HttpProbe(BaseHTTPRequestHandler):
                     identity_store.delete_squad(requested_id)
                     response = identity_store.squad_list_compact() if hasattr(identity_store, "squad_list_compact") else identity_store.squad_list()
                     response_name = "squad-deleted-list"
+                    emit("fut-squad-deleted", path=self.path, squad_id=requested_id,
+                         remaining=[int(row.get("id", 0)) for row in response.get("squad", [])] if isinstance(response, dict) else [])
                 elif (
                     is_active_route
                     and requested_id is not None

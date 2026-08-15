@@ -324,6 +324,11 @@ class LocalIdentityStore:
                 connection.execute("ALTER TABLE squads ADD COLUMN chemistry INTEGER NOT NULL DEFAULT 0")
             if "star_rating" not in squad_columns:
                 connection.execute("ALTER TABLE squads ADD COLUMN star_rating INTEGER NOT NULL DEFAULT 0")
+            # A squad the user has deliberately saved is never auto-populated
+            # again.  Legacy rows default to 0 so the existing recovery path still
+            # protects clubs migrated from a build that could zero their squad.
+            if "client_saved" not in squad_columns:
+                connection.execute("ALTER TABLE squads ADD COLUMN client_saved INTEGER NOT NULL DEFAULT 0")
             squad_player_columns = {row[1] for row in connection.execute("PRAGMA table_info(squad_players)").fetchall()}
             if "kit_number" not in squad_player_columns:
                 connection.execute("ALTER TABLE squad_players ADD COLUMN kit_number INTEGER NOT NULL DEFAULT 0")
@@ -1947,6 +1952,14 @@ class LocalIdentityStore:
         if fut_user is None:
             return False
         squad_id = int(fut_user["active_squad_id"])
+        squad_row = connection.execute(
+            "SELECT client_saved FROM squads WHERE squad_id = ?", (squad_id,)
+        ).fetchone()
+        if squad_row is not None and int(squad_row["client_saved"] or 0):
+            # The user built this squad.  A short XI is their choice, not the
+            # zeroed-squad corruption this recovery exists for, so never fill the
+            # empty slots with arbitrary owned cards.
+            return False
         nonzero = int(connection.execute(
             "SELECT COUNT(*) FROM squad_players WHERE squad_id = ? AND item_id > 0", (squad_id,)
         ).fetchone()[0])
@@ -4716,26 +4729,27 @@ class LocalIdentityStore:
                     "WHERE persona_id = ? AND squad_id = ?", (persona_id, squad_id)
                 ).fetchone()
             if row is None:
-                insert_values = (
-                    requested_name or "Local XI",
-                    requested_formation or "f442",
-                    self._bounded_int(requested_chemistry, 0, minimum=0, maximum=100),
-                    self._bounded_int(requested_rating, 0, minimum=0, maximum=100),
+                # Squads are created through POST /squad with a zero id.  A write
+                # naming an id this persona does not own is stale client state --
+                # typically the editor still holding a squad that was just deleted
+                # -- so it must not resurrect that squad.  Creating here is only a
+                # bootstrap safety net for a persona that owns no squad at all.
+                owns_any = connection.execute(
+                    "SELECT 1 FROM squads WHERE persona_id = ? LIMIT 1", (persona_id,)
+                ).fetchone()
+                if owns_any is not None:
+                    return self.squad_list()
+                cursor = connection.execute(
+                    "INSERT INTO squads (persona_id, squad_name, formation, active, chemistry, star_rating) VALUES (?, ?, ?, 0, ?, ?)",
+                    (
+                        persona_id,
+                        requested_name or "Local XI",
+                        requested_formation or "f442",
+                        self._bounded_int(requested_chemistry, 0, minimum=0, maximum=100),
+                        self._bounded_int(requested_rating, 0, minimum=0, maximum=100),
+                    ),
                 )
-                if squad_id > 0:
-                    # A write naming an unknown squad creates it under the id the
-                    # client chose, so its follow-up GET /squad/{id} resolves.
-                    connection.execute(
-                        "INSERT INTO squads (squad_id, persona_id, squad_name, formation, active, chemistry, star_rating) "
-                        "VALUES (?, ?, ?, ?, 0, ?, ?)",
-                        (squad_id, persona_id, *insert_values),
-                    )
-                else:
-                    cursor = connection.execute(
-                        "INSERT INTO squads (persona_id, squad_name, formation, active, chemistry, star_rating) VALUES (?, ?, ?, 0, ?, ?)",
-                        (persona_id, *insert_values),
-                    )
-                    squad_id = int(cursor.lastrowid)
+                squad_id = int(cursor.lastrowid)
                 row = connection.execute(
                     "SELECT squad_id,squad_name,formation,active,chemistry,star_rating FROM squads WHERE squad_id=?",
                     (squad_id,),
@@ -4798,7 +4812,7 @@ class LocalIdentityStore:
                 return self.squad_list()
 
             connection.execute(
-                "UPDATE squads SET squad_name = ?, formation = ?, chemistry = ?, star_rating = ? WHERE squad_id = ?",
+                "UPDATE squads SET squad_name = ?, formation = ?, chemistry = ?, star_rating = ?, client_saved = 1 WHERE squad_id = ?",
                 (squad_name, formation, chemistry, star_rating, squad_id),
             )
             self._set_active_squad_locked(connection, persona_id, squad_id, force=should_activate)
@@ -4919,8 +4933,8 @@ class LocalIdentityStore:
             persona_id = int(self._identity(connection)["persona_id"])
             self._ensure_fut_user_locked(connection)
             cursor = connection.execute(
-                "INSERT INTO squads (persona_id, squad_name, formation, active, chemistry, star_rating) "
-                "VALUES (?, ?, ?, 0, 0, 0)",
+                "INSERT INTO squads (persona_id, squad_name, formation, active, chemistry, star_rating, client_saved) "
+                "VALUES (?, ?, ?, 0, 0, 0, 1)",
                 (
                     persona_id,
                     str(document.get("squadName") or "New Squad").strip()[:32] or "New Squad",
