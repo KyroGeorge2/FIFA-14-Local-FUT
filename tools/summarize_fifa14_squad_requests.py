@@ -80,7 +80,7 @@ def summarize_request(event: dict[str, Any]) -> dict[str, Any]:
     if isinstance(headers, dict):
         override = headers.get("X-HTTP-Method-Override") or headers.get("x-http-method-override")
         if override:
-            record["methodOverride"] = str(override)
+            record["methodOverride"] = str(override).upper()
     if document is not None:
         players = document.get("players")
         record["bodySquadId"] = body_squad_id(document)
