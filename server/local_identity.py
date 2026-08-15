@@ -324,6 +324,11 @@ class LocalIdentityStore:
                 connection.execute("ALTER TABLE squads ADD COLUMN chemistry INTEGER NOT NULL DEFAULT 0")
             if "star_rating" not in squad_columns:
                 connection.execute("ALTER TABLE squads ADD COLUMN star_rating INTEGER NOT NULL DEFAULT 0")
+            # A squad the user has deliberately saved is never auto-populated
+            # again.  Legacy rows default to 0 so the existing recovery path still
+            # protects clubs migrated from a build that could zero their squad.
+            if "client_saved" not in squad_columns:
+                connection.execute("ALTER TABLE squads ADD COLUMN client_saved INTEGER NOT NULL DEFAULT 0")
             squad_player_columns = {row[1] for row in connection.execute("PRAGMA table_info(squad_players)").fetchall()}
             if "kit_number" not in squad_player_columns:
                 connection.execute("ALTER TABLE squad_players ADD COLUMN kit_number INTEGER NOT NULL DEFAULT 0")
@@ -1947,6 +1952,14 @@ class LocalIdentityStore:
         if fut_user is None:
             return False
         squad_id = int(fut_user["active_squad_id"])
+        squad_row = connection.execute(
+            "SELECT client_saved FROM squads WHERE squad_id = ?", (squad_id,)
+        ).fetchone()
+        if squad_row is not None and int(squad_row["client_saved"] or 0):
+            # The user built this squad.  A short XI is their choice, not the
+            # zeroed-squad corruption this recovery exists for, so never fill the
+            # empty slots with arbitrary owned cards.
+            return False
         nonzero = int(connection.execute(
             "SELECT COUNT(*) FROM squad_players WHERE squad_id = ? AND item_id > 0", (squad_id,)
         ).fetchone()[0])
@@ -4668,18 +4681,39 @@ class LocalIdentityStore:
         if not isinstance(document, dict):
             raise ValueError("squad body must be a JSON object")
         players = document.get("players")
+        requested_id = self._document_squad_id(document, requested_id)
         # The retail tournament handoff sends a partial captain/kicktakers PUT
         # immediately before MatchReady. It intentionally contains no players array.
         if players is None:
+            if requested_id > 0:
+                # The squad hub renames through the same players-less PUT, so
+                # apply whatever metadata it carries instead of dropping it.
+                self.update_squad_metadata(requested_id, document)
             return self.squad_list()
         if not isinstance(players, list):
             raise ValueError("squad players must be an array")
-        formation = str(document.get("formation") or "f442")
-        squad_name = str(document.get("squadName") or "Local XI").strip()[:32] or "Local XI"
-        chemistry = self._bounded_int(document.get("chemistry", 0), 0, minimum=0, maximum=100)
-        star_rating = self._bounded_int(
-            document.get("starRating", document.get("rating", 0)), 0, minimum=0, maximum=100
+        # The squad editor's closing write carries all 23 slots and the formation
+        # but no squadName.  Every metadata member is therefore optional: an
+        # absent one keeps what the squad already has rather than reverting it to
+        # the historical default, which is what silently renamed squads back to
+        # "Local XI" as soon as the user left the editor.
+        requested_name = document.get("squadName")
+        requested_name = (
+            str(requested_name).strip()[:32]
+            if isinstance(requested_name, str) and str(requested_name).strip() else None
         )
+        requested_formation = document.get("formation")
+        requested_formation = (
+            str(requested_formation).strip()
+            if isinstance(requested_formation, str) and str(requested_formation).strip() else None
+        )
+        requested_chemistry = document.get("chemistry") if "chemistry" in document else None
+        if "starRating" in document:
+            requested_rating = document.get("starRating")
+        elif "rating" in document:
+            requested_rating = document.get("rating")
+        else:
+            requested_rating = None
 
         with self._lock, closing(self._connect()) as connection, connection:
             identity = self._identity(connection)
@@ -4687,7 +4721,7 @@ class LocalIdentityStore:
             persona_id = int(identity["persona_id"])
             self._repair_owned_items_locked(connection, persona_id)
             active_id = fut_user["active_squad_id"]
-            squad_id = int(active_id) if requested_id in (None, 0) and active_id is not None else int(requested_id or 0)
+            squad_id = requested_id if requested_id > 0 else (int(active_id) if active_id is not None else 0)
             row = None
             if squad_id > 0:
                 row = connection.execute(
@@ -4695,15 +4729,48 @@ class LocalIdentityStore:
                     "WHERE persona_id = ? AND squad_id = ?", (persona_id, squad_id)
                 ).fetchone()
             if row is None:
+                # Squads are created through POST /squad with a zero id.  A write
+                # naming an id this persona does not own is stale client state --
+                # typically the editor still holding a squad that was just deleted
+                # -- so it must not resurrect that squad.  Creating here is only a
+                # bootstrap safety net for a persona that owns no squad at all.
+                owns_any = connection.execute(
+                    "SELECT 1 FROM squads WHERE persona_id = ? LIMIT 1", (persona_id,)
+                ).fetchone()
+                if owns_any is not None:
+                    return self.squad_list()
                 cursor = connection.execute(
-                    "INSERT INTO squads (persona_id, squad_name, formation, active, chemistry, star_rating) VALUES (?, ?, ?, 1, ?, ?)",
-                    (persona_id, squad_name, formation, chemistry, star_rating),
+                    "INSERT INTO squads (persona_id, squad_name, formation, active, chemistry, star_rating) VALUES (?, ?, ?, 0, ?, ?)",
+                    (
+                        persona_id,
+                        requested_name or "Local XI",
+                        requested_formation or "f442",
+                        self._bounded_int(requested_chemistry, 0, minimum=0, maximum=100),
+                        self._bounded_int(requested_rating, 0, minimum=0, maximum=100),
+                    ),
                 )
                 squad_id = int(cursor.lastrowid)
                 row = connection.execute(
                     "SELECT squad_id,squad_name,formation,active,chemistry,star_rating FROM squads WHERE squad_id=?",
                     (squad_id,),
                 ).fetchone()
+
+            squad_name = requested_name or str(row["squad_name"] or "Local XI")
+            formation = requested_formation or str(row["formation"] or "f442")
+            chemistry = (
+                self._bounded_int(requested_chemistry, 0, minimum=0, maximum=100)
+                if requested_chemistry is not None else int(row["chemistry"] or 0)
+            )
+            star_rating = (
+                self._bounded_int(requested_rating, 0, minimum=0, maximum=100)
+                if requested_rating is not None else int(row["star_rating"] or 0)
+            )
+
+            # Retail echoes the squad's own active flag back on save.  Only an
+            # explicit false leaves the current match squad alone; a body without
+            # the member keeps the historical select-on-save behaviour.
+            explicit_active = document.get("active")
+            should_activate = bool(explicit_active) if isinstance(explicit_active, (bool, int)) else True
 
             existing_rows = {
                 int(existing["slot_index"]): existing
@@ -4740,55 +4807,217 @@ class LocalIdentityStore:
                 # Do not let the transient GK-only/mostly-zero parser state destroy
                 # either the 23 slots or the known-good chemistry/rating/name.  Only
                 # reaffirm which existing squad is active and acknowledge the PUT.
-                connection.execute("UPDATE squads SET active = 0 WHERE persona_id = ?", (persona_id,))
-                connection.execute("UPDATE squads SET active = 1 WHERE squad_id = ?", (squad_id,))
-                connection.execute(
-                    "UPDATE fut_users SET active_squad_id = ? WHERE persona_id = ?", (squad_id, persona_id)
-                )
+                self._set_active_squad_locked(connection, persona_id, squad_id, force=should_activate)
                 connection.commit()
                 return self.squad_list()
 
-            connection.execute("UPDATE squads SET active = 0 WHERE persona_id = ?", (persona_id,))
             connection.execute(
-                "UPDATE squads SET squad_name = ?, formation = ?, active = 1, chemistry = ?, star_rating = ? WHERE squad_id = ?",
+                "UPDATE squads SET squad_name = ?, formation = ?, chemistry = ?, star_rating = ?, client_saved = 1 WHERE squad_id = ?",
                 (squad_name, formation, chemistry, star_rating, squad_id),
             )
+            self._set_active_squad_locked(connection, persona_id, squad_id, force=should_activate)
             connection.execute("DELETE FROM squad_players WHERE squad_id = ?", (squad_id,))
-            used_items: set[int] = set()
             for index in range(23):
                 item = incoming.get(index)
                 kit_number = incoming_kit_numbers.get(index, 0)
                 self._write_squad_slot_locked(connection, squad_id, index, item, kit_number=kit_number)
-                if item is not None:
-                    used_items.add(int(item["item_id"]))
 
-            connection.execute(
-                "UPDATE fut_users SET active_squad_id = ? WHERE persona_id = ?", (squad_id, persona_id)
+            self._sync_player_piles_locked(connection, persona_id)
+        return self.squad_list()
+
+    def _sync_player_piles_locked(self, connection: sqlite3.Connection, persona_id: int) -> None:
+        """Mark owned players 'squad' when *any* squad fields them, 'club' otherwise.
+
+        Membership is deliberately evaluated across every squad the persona owns:
+        scoping it to the squad currently being written would demote the members
+        of all other squads back to My Club on each save.
+        """
+        squad_member_ids = {
+            int(row["item_id"])
+            for row in connection.execute(
+                "SELECT sp.item_id FROM squad_players sp JOIN squads s ON s.squad_id = sp.squad_id "
+                "WHERE s.persona_id = ? AND sp.item_id > 0",
+                (int(persona_id),),
+            ).fetchall()
+        }
+        for item_row in connection.execute(
+            "SELECT * FROM items WHERE persona_id = ? AND item_type = ? AND pile NOT IN ('trade','pending')", (persona_id, PLAYER_ITEM_TYPE)
+        ).fetchall():
+            item_id = int(item_row["item_id"])
+            if int(item_row["asset_id"]) not in PLAYER_REFERENCE_BY_ASSET:
+                continue
+            try:
+                existing_payload = json.loads(item_row["payload"] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                existing_payload = {}
+            in_squad = item_id in squad_member_ids
+            payload = self._canonical_player_payload(
+                item_id=item_id, asset_id=int(item_row["asset_id"]),
+                existing=existing_payload if isinstance(existing_payload, dict) else {},
+                pile=7,
             )
-            for item_row in connection.execute(
-                "SELECT * FROM items WHERE persona_id = ? AND item_type = ? AND pile NOT IN ('trade','pending')", (persona_id, PLAYER_ITEM_TYPE)
-            ).fetchall():
-                item_id = int(item_row["item_id"])
-                if int(item_row["asset_id"]) not in PLAYER_REFERENCE_BY_ASSET:
-                    continue
-                try:
-                    existing_payload = json.loads(item_row["payload"] or "{}")
-                except (TypeError, json.JSONDecodeError):
-                    existing_payload = {}
-                in_squad = item_id in used_items
-                payload = self._canonical_player_payload(
-                    item_id=item_id, asset_id=int(item_row["asset_id"]),
-                    existing=existing_payload if isinstance(existing_payload, dict) else {},
-                    pile=7,
+            connection.execute(
+                "UPDATE items SET item_type = ?, pile = ?, payload = ? WHERE item_id = ? AND persona_id = ?",
+                (
+                    PLAYER_ITEM_TYPE, "squad" if in_squad else "club",
+                    json.dumps(payload, separators=(",", ":"), ensure_ascii=False),
+                    item_id, persona_id,
+                ),
+            )
+
+    @staticmethod
+    def _document_squad_id(document: dict[str, Any], requested_id: int | None) -> int:
+        """Resolve which squad a write targets: path id first, then body id.
+
+        Retail addresses a squad through PUT /squad/{id}; the squad hub also
+        echoes the id in the body.  Honouring both is what lets a client address
+        anything other than the single active squad.
+        """
+        for candidate in (requested_id, document.get("squadId"), document.get("id")):
+            try:
+                value = int(candidate)
+            except (TypeError, ValueError):
+                continue
+            if 0 < value <= 2_147_483_647:
+                return value
+        return 0
+
+    def _set_active_squad_locked(
+        self, connection: sqlite3.Connection, persona_id: int, squad_id: int, force: bool = True
+    ) -> None:
+        """Point the persona at one squad, leaving exactly one active row.
+
+        ``force=False`` only promotes the squad when nothing else is active, so
+        saving an unselected squad cannot steal the match squad from the one the
+        user actually picked.
+        """
+        if squad_id <= 0:
+            return
+        if not force:
+            other = connection.execute(
+                "SELECT squad_id FROM squads WHERE persona_id = ? AND active = 1 AND squad_id != ? ORDER BY squad_id LIMIT 1",
+                (int(persona_id), int(squad_id)),
+            ).fetchone()
+            if other is not None:
+                connection.execute(
+                    "UPDATE squads SET active = 0 WHERE persona_id = ? AND squad_id = ?",
+                    (int(persona_id), int(squad_id)),
                 )
                 connection.execute(
-                    "UPDATE items SET item_type = ?, pile = ?, payload = ? WHERE item_id = ? AND persona_id = ?",
-                    (
-                        PLAYER_ITEM_TYPE, "squad" if in_squad else "club",
-                        json.dumps(payload, separators=(",", ":"), ensure_ascii=False),
-                        item_id, persona_id,
-                    ),
+                    "UPDATE fut_users SET active_squad_id = ? WHERE persona_id = ?",
+                    (int(other["squad_id"]), int(persona_id)),
                 )
+                return
+        connection.execute("UPDATE squads SET active = 0 WHERE persona_id = ?", (int(persona_id),))
+        connection.execute(
+            "UPDATE squads SET active = 1 WHERE persona_id = ? AND squad_id = ?",
+            (int(persona_id), int(squad_id)),
+        )
+        connection.execute(
+            "UPDATE fut_users SET active_squad_id = ? WHERE persona_id = ?", (int(squad_id), int(persona_id))
+        )
+
+    def create_squad(self, document: dict[str, Any]) -> dict[str, Any]:
+        """Create a squad for ``POST /squad`` with a zero id.
+
+        The FIFA 14 squad hub creates both an empty squad and a copy of an
+        existing one through this exact request: no id in the path and ``id: 0``
+        in the body.  Resolving that to the active squad is what made "create
+        squad" silently overwrite the club's only squad.  The new squad is
+        deliberately not selected, so creating one cannot swap the match squad
+        for an empty XI; the client selects it explicitly or by saving it.
+        """
+        if not isinstance(document, dict):
+            raise ValueError("squad body must be a JSON object")
+        with self._lock, closing(self._connect()) as connection, connection:
+            persona_id = int(self._identity(connection)["persona_id"])
+            self._ensure_fut_user_locked(connection)
+            cursor = connection.execute(
+                "INSERT INTO squads (persona_id, squad_name, formation, active, chemistry, star_rating, client_saved) "
+                "VALUES (?, ?, ?, 0, 0, 0, 1)",
+                (
+                    persona_id,
+                    str(document.get("squadName") or "New Squad").strip()[:32] or "New Squad",
+                    str(document.get("formation") or "f442"),
+                ),
+            )
+            squad_id = int(cursor.lastrowid)
+            for slot_index in range(23):
+                self._write_squad_slot_locked(connection, squad_id, slot_index, None)
+        payload = dict(document)
+        payload["id"] = squad_id
+        payload["squadId"] = squad_id
+        payload.setdefault("active", False)
+        self.save_squad(payload, requested_id=squad_id)
+        return self.squad_detail(squad_id)
+
+    def update_squad_metadata(self, squad_id: int, document: dict[str, Any]) -> dict[str, Any]:
+        """Apply a players-less squad write: name, formation and scalar state.
+
+        Renames arrive as ``PUT /squad/{id}`` with a body of just ``id`` and
+        ``squadName``.  The tournament handoff uses the same shape to send only
+        captain/kicktakers, so only members actually present are written.
+        """
+        assignments: list[str] = []
+        values: list[Any] = []
+        name = document.get("squadName")
+        if isinstance(name, str) and name.strip():
+            assignments.append("squad_name = ?")
+            values.append(name.strip()[:32])
+        formation = document.get("formation")
+        if isinstance(formation, str) and formation.strip():
+            assignments.append("formation = ?")
+            values.append(formation.strip())
+        for key, column in (("chemistry", "chemistry"), ("starRating", "star_rating")):
+            if key in document:
+                assignments.append(f"{column} = ?")
+                values.append(self._bounded_int(document.get(key), 0, minimum=0, maximum=100))
+        if not assignments:
+            return self.squad_list()
+        with self._lock, closing(self._connect()) as connection, connection:
+            persona_id = int(self._identity(connection)["persona_id"])
+            connection.execute(
+                f"UPDATE squads SET {', '.join(assignments)} WHERE persona_id = ? AND squad_id = ?",
+                (*values, persona_id, int(squad_id)),
+            )
+        return self.squad_list()
+
+    def set_active_squad(self, squad_id: int) -> dict[str, Any]:
+        """Select which existing squad the club and match flows use."""
+        with self._lock, closing(self._connect()) as connection, connection:
+            persona_id = int(self._identity(connection)["persona_id"])
+            self._ensure_fut_user_locked(connection)
+            row = connection.execute(
+                "SELECT squad_id FROM squads WHERE persona_id = ? AND squad_id = ?",
+                (persona_id, int(squad_id)),
+            ).fetchone()
+            if row is not None:
+                self._set_active_squad_locked(connection, persona_id, int(squad_id))
+        return self.squad_list()
+
+    def delete_squad(self, squad_id: int) -> dict[str, Any]:
+        """Remove one squad, keeping at least one squad and one active selection.
+
+        No card is destroyed: players freed by the delete return to My Club, which
+        is what retail squad deletion does.  Deleting the final remaining squad is
+        refused because the match flows always need an active squad document.
+        """
+        with self._lock, closing(self._connect()) as connection, connection:
+            persona_id = int(self._identity(connection)["persona_id"])
+            self._ensure_fut_user_locked(connection)
+            rows = connection.execute(
+                "SELECT squad_id, active FROM squads WHERE persona_id = ? ORDER BY squad_id", (persona_id,)
+            ).fetchall()
+            target = next((row for row in rows if int(row["squad_id"]) == int(squad_id)), None)
+            if target is not None and len(rows) > 1:
+                connection.execute("DELETE FROM squad_players WHERE squad_id = ?", (int(squad_id),))
+                connection.execute(
+                    "DELETE FROM squads WHERE persona_id = ? AND squad_id = ?", (persona_id, int(squad_id))
+                )
+                if bool(target["active"]):
+                    remaining = [int(row["squad_id"]) for row in rows if int(row["squad_id"]) != int(squad_id)]
+                    self._set_active_squad_locked(connection, persona_id, remaining[0])
+                self._sync_player_piles_locked(connection, persona_id)
         return self.squad_list()
 
     def squad_list(self) -> dict[str, Any]:

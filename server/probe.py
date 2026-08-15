@@ -2368,6 +2368,21 @@ class HttpProbe(BaseHTTPRequestHandler):
             )
         )
 
+    @staticmethod
+    def _fut_squad_delete_id(path: str) -> int | None:
+        """Return the squad id for FIFA 14's tunnelled squad delete, else None.
+
+        The client cannot issue a DELETE verb, so the squad hub deletes through
+        ``GET /ut/delete/game/fifa14/squad/{id}`` -- the same ``/ut/delete/``
+        tunnel it uses for logout at ``/ut/delete/auth``.  Without this the route
+        fell through to the generic unmapped-route acknowledgement, which is why
+        a deleted squad was acknowledged but never actually removed.
+        """
+        match = re.fullmatch(
+            r"/ut/delete/game/fifa14/squad/(\d+)", str(path).partition("?")[0], re.IGNORECASE
+        )
+        return int(match.group(1)) if match else None
+
     def _handle(self) -> None:
         length = int(self.headers.get("content-length", "0"))
         body = self.rfile.read(min(length, 1_048_576)) if length else b""
@@ -3489,6 +3504,29 @@ class HttpProbe(BaseHTTPRequestHandler):
             )
         elif (
             getattr(self.server, "probe_name", "http") == "fut-http"
+            and self._fut_squad_delete_id(path_without_query) is not None
+            and identity_store is not None
+        ):
+            squad_id = int(self._fut_squad_delete_id(path_without_query) or 0)
+            remaining: list[int] = []
+            if hasattr(identity_store, "delete_squad"):
+                listing = identity_store.delete_squad(squad_id)
+                if isinstance(listing, dict):
+                    remaining = [
+                        int(row.get("id", 0)) for row in listing.get("squadList", []) if isinstance(row, dict)
+                    ]
+            # The client re-reads /squad/list immediately afterwards, so keep the
+            # empty acknowledgement this route has always answered with rather
+            # than inventing a delete response contract.
+            payload = build_fut_json_payload({})
+            self.send_response(200)
+            self.send_header("content-type", "application/json; charset=utf-8")
+            self.send_header("cache-control", "no-store")
+            emit("fut-squad-deleted", path=self.path, squad_id=squad_id, remaining=remaining)
+            emit("fut-http-response", method=self.command, effective_method=effective_method,
+                 path=self.path, response_name="squad-deleted-ack", status=200, bytes=len(payload))
+        elif (
+            getattr(self.server, "probe_name", "http") == "fut-http"
             and (
                 path_without_query == "/ut/game/fifa14/squad"
                 or path_without_query.startswith("/ut/game/fifa14/squad/")
@@ -3499,11 +3537,55 @@ class HttpProbe(BaseHTTPRequestHandler):
                 request = None
                 tail = path_without_query.rsplit("/", 1)[-1]
                 requested_id = int(tail) if tail.isdigit() else None
-                if effective_method in {"PUT", "POST"} and body:
-                    request = json.loads(body.decode("utf-8"))
-                    identity_store.save_squad(request, requested_id=requested_id)
+                is_active_route = path_without_query.startswith("/ut/game/fifa14/squad/active")
+                if effective_method == "DELETE" and requested_id is not None and hasattr(identity_store, "delete_squad"):
+                    identity_store.delete_squad(requested_id)
+                    response = identity_store.squad_list_compact() if hasattr(identity_store, "squad_list_compact") else identity_store.squad_list()
+                    response_name = "squad-deleted-list"
+                    emit("fut-squad-deleted", path=self.path, squad_id=requested_id,
+                         remaining=[int(row.get("id", 0)) for row in response.get("squad", [])] if isinstance(response, dict) else [])
+                elif (
+                    is_active_route
+                    and requested_id is not None
+                    and effective_method in {"PUT", "POST"}
+                    and hasattr(identity_store, "set_active_squad")
+                ):
+                    # PUT /squad/active/{id} selects an existing squad without
+                    # rewriting any slot.
+                    identity_store.set_active_squad(requested_id)
                     response = identity_store.squad_detail(requested_id) if hasattr(identity_store, "squad_detail") else identity_store.active_squad_document()
-                    response_name = "squad-saved-detail-beta222"
+                    response_name = "squad-active-selected"
+                elif effective_method in {"PUT", "POST"} and body:
+                    request = json.loads(body.decode("utf-8"))
+                    body_squad_id = 0
+                    if isinstance(request, dict):
+                        try:
+                            body_squad_id = int(request.get("squadId") or request.get("id") or 0)
+                        except (TypeError, ValueError):
+                            body_squad_id = 0
+                    if (
+                        effective_method == "POST"
+                        and path_without_query == "/ut/game/fifa14/squad"
+                        and requested_id is None
+                        and body_squad_id <= 0
+                        and hasattr(identity_store, "create_squad")
+                    ):
+                        # The squad hub creates an empty squad and copies an
+                        # existing one through this exact request: no path id and
+                        # id 0 in the body.
+                        response = identity_store.create_squad(request)
+                        response_name = "squad-created-detail"
+                        emit("fut-squad-created",
+                             path=self.path,
+                             squad_id=int(response.get("id", 0)) if isinstance(response, dict) else 0,
+                             squad_name=response.get("squadName") if isinstance(response, dict) else None)
+                    else:
+                        identity_store.save_squad(request, requested_id=requested_id)
+                        # Echo back the squad that was written, which is not always
+                        # the active one once more than one squad exists.
+                        detail_id = requested_id if requested_id else (body_squad_id or None)
+                        response = identity_store.squad_detail(detail_id) if hasattr(identity_store, "squad_detail") else identity_store.active_squad_document()
+                        response_name = "squad-saved-detail-beta222"
                 elif path_without_query == "/ut/game/fifa14/squad/list":
                     response = identity_store.squad_list_compact() if hasattr(identity_store, "squad_list_compact") else identity_store.squad_list()
                     response_name = "squad-list-compact-beta222"

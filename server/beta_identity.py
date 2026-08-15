@@ -1204,7 +1204,10 @@ class BetaIdentityStore(LocalIdentityStore):
             # Truly fresh BETA profile only: there is no existing club to preserve.
             connection.execute("DELETE FROM pack_contents")
             connection.execute("DELETE FROM packs WHERE persona_id=?", (persona_id,))
-            connection.execute("DELETE FROM squad_players")
+            connection.execute(
+                "DELETE FROM squad_players WHERE squad_id IN (SELECT squad_id FROM squads WHERE persona_id=?)",
+                (persona_id,),
+            )
             connection.execute("DELETE FROM squads WHERE persona_id=?", (persona_id,))
             connection.execute("DELETE FROM items WHERE persona_id=?", (persona_id,))
             connection.execute("DELETE FROM clubs WHERE persona_id=?", (persona_id,))
