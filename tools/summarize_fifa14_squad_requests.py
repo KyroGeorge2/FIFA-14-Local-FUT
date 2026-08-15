@@ -172,8 +172,8 @@ def main() -> int:
     # GET /ut/delete/game/fifa14/squad/{id}, the same tunnel as /ut/delete/auth.
     deletes = [
         row for row in requests
-        if str(row.get("method")) == "DELETE" or row.get("methodOverride") == "DELETE"
-        or str(row.get("path", "")).lower().startswith("/ut/delete/")
+        if str(row.get("method", "")).upper() == "DELETE" or str(row.get("methodOverride", "")).upper() == "DELETE"
+        or str(row.get("path", "")).lower().startswith("/ut/delete/game/fifa14/squad/")
     ]
 
     findings: list[str] = []
