@@ -1,0 +1,4 @@
+# Test-only dependencies.
+# The suite in tests/ exercises the pure catalogue/SQLite logic, so it does not
+# need the runtime packages in requirements.txt (cryptography, frida).
+pytest>=8,<10
