@@ -7,6 +7,13 @@ body:
     attributes:
       value: |
         Please do not upload EA game executables/DLLs, account credentials, private keys, or other sensitive files.
+
+        **Before filing:** run `DIAGNOSE.cmd`. It checks the things that cause most
+        startup and connection reports (missing dependencies, a port already in
+        use, no OpenSSL, an unreadable game folder) and writes
+        `diagnostics-report.txt`. Personal paths and your Windows user name are
+        redacted, so the report is safe to paste. It often tells you the fix
+        outright.
   - type: input
     id: version
     attributes:
@@ -50,6 +57,13 @@ body:
       label: Expected behaviour
     validations:
       required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: DIAGNOSE.cmd report
+      description: Paste the contents of diagnostics-report.txt. It is already redacted.
+      render: shell
+
   - type: textarea
     id: error
     attributes:

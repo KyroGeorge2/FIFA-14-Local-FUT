@@ -31,6 +31,21 @@ Enter Gold Cup, finish round 1 with a win, verify non-zero match coins on the re
 3. Run `RUN_FIFA14_LOCAL_BETA.cmd` as Administrator. The launcher auto-detects FIFA 14; if needed, paste the `Game` folder once and it will be remembered in `config.local.psd1`.
 4. Wait for the launcher/server to report that it is ready before entering Ultimate Team.
 
+## If something does not work
+
+Run `DIAGNOSE.cmd`. It checks the conditions behind most startup and connection
+reports, and prints what to do about each one:
+
+- Python version, and whether `cryptography` and `frida` are installed
+- whether OpenSSL can be found, which the legacy certificates require
+- whether the ports the launcher binds are free: 42129, 42128, 8080, 8099, 8306, 44125
+- whether the process is elevated, which Frida injection needs
+- whether the FIFA 14 folder resolves and contains the expected files
+- whether the bundled catalogues are complete and the server modules import
+
+It also writes `diagnostics-report.txt`. Personal paths and your Windows user
+name are redacted, so it is safe to paste into an issue.
+
 This project expects an existing legitimate FIFA 14 PC installation and does not include the game itself.
 
 ## Repository / development
