@@ -2491,7 +2491,16 @@ class BetaIdentityStore(LocalIdentityStore):
         progressData is four zero bytes (``AAAAAA==``). That state is not a
         playable saved bracket and crashes when reopened. Only later rounds or
         non-zero opaque progress bytes are advertised as resumable.
+
+        A saved round is also worthless without the bracket itself. When the
+        server advances the round after a won match it deliberately does not
+        invent a tournamentData blob, so an empty blob means there is nothing
+        for the client to reopen: advertising it anyway makes the client parse
+        an empty buffer as a bracket, which is the crash reported when
+        continuing a tournament after leaving FUT.
         """
+        if not str(tournament_data or "").strip():
+            return False
         if int(round_value) > 1:
             return True
         raw = str(progress_data or "").strip()
