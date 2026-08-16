@@ -87,5 +87,19 @@ if (-not (Test-Path -LiteralPath $venvPython)) {
     }
 }
 
+$playerDataCache = Join-Path $projectDir "artifacts\fifa14-player-data-v1.json"
+$playerDataExtractor = Join-Path $PSScriptRoot "extract_fifa14_player_data.py"
+if (-not (Test-Path -LiteralPath $playerDataCache -PathType Leaf)) {
+    Write-Host "Player-data cache is missing; extracting it from the installed FIFA 14 database..." -ForegroundColor Cyan
+    New-Item -ItemType Directory -Path (Split-Path -Parent $playerDataCache) -Force | Out-Null
+    & $venvPython $playerDataExtractor --game-root $GameRoot --output $playerDataCache
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $playerDataCache -PathType Leaf)) {
+        throw "Could not generate the FIFA 14 player-data cache: $playerDataCache"
+    }
+    Write-Host "Generated FIFA 14 player-data cache." -ForegroundColor Green
+} else {
+    Write-Host "Using existing FIFA 14 player-data cache: $playerDataCache" -ForegroundColor DarkGray
+}
+
 & (Join-Path $PSScriptRoot "run_fifa14_local_beta.ps1") -GameRoot $GameRoot -GameExe $GameExe
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

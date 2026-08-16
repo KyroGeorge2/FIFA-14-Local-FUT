@@ -12,7 +12,9 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
+from custom_cards import CustomCardCatalog
 from fifa14_ids import definition_id_for, resource_id_for
+from player_data import GAMEPLAY_FIELDS, TRAIT_RANGES, load_player_data
 
 
 DEFAULT_NUCLEUS_ID = 1_000_001
@@ -30,6 +32,7 @@ MANAGER_CATALOG_PATH = Path(__file__).with_name("manager-catalog.v237.json")
 SPECIAL_CATALOG_PATH = Path(__file__).with_name("fifa14-special-catalog.v240.json")
 LEGEND_CATALOG_PATH = Path(__file__).with_name("fifa14-legend-catalog.v24013.json")
 CONSUMABLE_CATALOG_PATH = Path(__file__).with_name("fifa14-consumable-catalog.v2412.json")
+PLAYER_DATA_CACHE_PATH = Path(__file__).resolve().parent.parent / "artifacts" / "fifa14-player-data-v1.json"
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -49,6 +52,16 @@ CONSUMABLE_CATALOG_DOCUMENT = _load_json(CONSUMABLE_CATALOG_PATH)
 PACK_DEFINITIONS = {int(entry["packType"]): entry for entry in PACK_CATALOG_DOCUMENT.get("packs", [])}
 PLAYER_CATALOG = list(PLAYER_CATALOG_DOCUMENT.get("players", []))
 PLAYER_BY_ASSET = {int(player["assetId"]): player for player in PLAYER_CATALOG}
+FULL_PLAYER_DATA_BY_ASSET, PLAYER_DATA_ERROR = load_player_data(PLAYER_DATA_CACHE_PATH)
+EDITOR_PLAYER_BY_ASSET: dict[int, dict[str, Any]] = {}
+for asset_id, player in PLAYER_BY_ASSET.items():
+    detailed = FULL_PLAYER_DATA_BY_ASSET.get(asset_id)
+    if detailed is None:
+        continue
+    merged = dict(player)
+    merged["gameplayAttributes"] = dict(detailed["gameplayAttributes"])
+    merged["traits"] = dict(detailed["traits"])
+    EDITOR_PLAYER_BY_ASSET[asset_id] = merged
 SPECIAL_PLAYER_CATALOG = list(SPECIAL_CATALOG_DOCUMENT.get("players", []))
 # World Cup cards belonged to the separate FIFA 14 World Cup mode and the three
 # old fuzzy "legend" matches are superseded by the verified 42-card legend file.
@@ -127,6 +140,7 @@ FULL_CLUB_ITEM_BASE = 171_000_000_000
 FULL_SPECIAL_ITEM_BASE = 172_000_000_000
 FULL_LEGEND_ITEM_BASE = 173_000_000_000
 PACK_ITEM_BASE = 180_000_000_000
+CUSTOM_CARD_ITEM_BASE = 196_000_000_000
 PACK_FIDELITY_SCHEMA = "fifa14-v24012-pack-fidelity"
 LEGACY_INTRO_ITEM_BASE = 170_000_000_000
 
@@ -145,6 +159,9 @@ class LocalIdentityStore:
         self.database = Path(database)
         self.database.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
+        self.custom_cards = CustomCardCatalog(
+            self.database.with_name("custom-cards.v1.json"), EDITOR_PLAYER_BY_ASSET
+        )
         self._initialize(initial_mode)
 
     def _connect(self) -> sqlite3.Connection:
@@ -279,6 +296,13 @@ class LocalIdentityStore:
                 CREATE TABLE IF NOT EXISTS schema_meta (
                     meta_key TEXT PRIMARY KEY,
                     meta_value TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS custom_card_grants (
+                    persona_id INTEGER NOT NULL,
+                    card_id TEXT NOT NULL,
+                    item_id INTEGER NOT NULL UNIQUE,
+                    created_at INTEGER NOT NULL,
+                    PRIMARY KEY (persona_id, card_id)
                 );
                 CREATE TABLE IF NOT EXISTS manager_reference (
                     manager_key INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -472,6 +496,76 @@ class LocalIdentityStore:
 
     def profile_kind(self) -> str:
         return "returning-local-club-pc" if self.has_club() else "first-use-no-club-pc"
+
+    def custom_card_definitions(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return self.custom_cards.list_cards()
+
+    def save_custom_card(self, document: dict[str, Any], *, card_id: str | None = None, grant: bool = False) -> dict[str, Any]:
+        with self._lock:
+            card = self.custom_cards.save(document, card_id=card_id)
+            result = {"card": card, "granted": None}
+            if grant:
+                result["granted"] = self.grant_custom_card(str(card["cardId"]))
+            return result
+
+    def delete_custom_card(self, card_id: str) -> bool:
+        with self._lock:
+            return self.custom_cards.delete(card_id)
+
+    def export_custom_cards(self) -> dict[str, Any]:
+        with self._lock:
+            return self.custom_cards.export_document()
+
+    def import_custom_cards(self, document: dict[str, Any], *, replace: bool = False) -> list[dict[str, Any]]:
+        with self._lock:
+            return self.custom_cards.import_document(document, replace=replace)
+
+    def grant_custom_card(self, card_id: str) -> dict[str, Any]:
+        with self._lock, closing(self._connect()) as connection, connection:
+            card = self.custom_cards.get(card_id)
+            if card is None:
+                raise ValueError("custom card does not exist")
+            identity = self._identity(connection)
+            persona_id = int(identity["persona_id"])
+            if connection.execute("SELECT 1 FROM clubs WHERE persona_id=?", (persona_id,)).fetchone() is None:
+                raise ValueError("a FUT club is required before granting a custom card")
+            grant = connection.execute(
+                "SELECT item_id FROM custom_card_grants WHERE persona_id=? AND card_id=?",
+                (persona_id, card_id),
+            ).fetchone()
+            item_id = int(grant["item_id"]) if grant is not None else int(connection.execute(
+                "SELECT COALESCE(MAX(item_id), ?) + 1 FROM items WHERE persona_id=? AND item_id>=?",
+                (CUSTOM_CARD_ITEM_BASE - 1, persona_id, CUSTOM_CARD_ITEM_BASE),
+            ).fetchone()[0])
+            source = dict(card)
+            source.update({
+                "untradeable": True,
+                "tradeable": False,
+                "contract": 99,
+                "fitness": 99,
+                "morale": 99,
+                "pile": 7,
+            })
+            payload = self._canonical_player_payload(
+                item_id=item_id,
+                asset_id=int(card["assetId"]),
+                existing=source,
+                pile=7,
+            )
+            encoded = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+            connection.execute(
+                "INSERT INTO items(item_id,persona_id,asset_id,item_type,pile,tradeable,payload) VALUES(?,?,?,?, 'club',0,?) "
+                "ON CONFLICT(item_id) DO UPDATE SET asset_id=excluded.asset_id,item_type=excluded.item_type,"
+                "pile='club',tradeable=0,payload=excluded.payload",
+                (item_id, persona_id, int(card["assetId"]), PLAYER_ITEM_TYPE, encoded),
+            )
+            connection.execute(
+                "INSERT INTO custom_card_grants(persona_id,card_id,item_id,created_at) VALUES(?,?,?,?) "
+                "ON CONFLICT(persona_id,card_id) DO UPDATE SET item_id=excluded.item_id",
+                (persona_id, card_id, item_id, int(time.time())),
+            )
+            return {"card": card, "itemData": payload, "updated": grant is not None}
 
     def account_info(self) -> dict[str, Any]:
         with self._lock, closing(self._connect()) as connection:
@@ -1705,6 +1799,20 @@ class LocalIdentityStore:
             ):
                 if key in source:
                     player[key] = source[key]
+            gameplay_source = source.get("gameplayAttributes")
+            traits_source = source.get("traits")
+            if isinstance(gameplay_source, dict):
+                player["gameplayAttributes"] = {
+                    str(field): int(value)
+                    for field, value in gameplay_source.items()
+                    if field is not None and value is not None
+                }
+            if isinstance(traits_source, dict):
+                player["traits"] = {
+                    str(field): int(value)
+                    for field, value in traits_source.items()
+                    if field is not None and value is not None
+                }
             # Persisted ItemData stores the six face attributes as attributeArray/
             # attributeList rather than the catalogue-only `attributes` key.
             # Preserve those special/Legend values during later repair passes.
@@ -1757,6 +1865,18 @@ class LocalIdentityStore:
         discard_value = self._bounded_int(source.get("discardValue", 0), 0)
         if discard_value <= 0 and source_tradeable and not source_untradeable:
             discard_value = self._player_discard_value(player)
+        gameplay_source = source.get("gameplayAttributes")
+        gameplay_overrides = {
+            field: int(gameplay_source[field])
+            for field in GAMEPLAY_FIELDS
+            if isinstance(gameplay_source, dict) and field in gameplay_source
+        }
+        traits_source = source.get("traits")
+        trait_overrides = {
+            field: int(traits_source[field])
+            for field in TRAIT_RANGES
+            if isinstance(traits_source, dict) and field in traits_source
+        }
 
         # BETA 2.25.0: keep the native-critical ItemData members first.  FIFA
         # 14's player parser is sensitive to this stream, and the older local
@@ -1782,6 +1902,8 @@ class LocalIdentityStore:
             "suspension": self._bounded_int(source.get("suspension", 0), 0),
             "training": self._bounded_int(source.get("training", 0), 0),
             "playStyle": self._bounded_int(source.get("playStyle", player.get("playStyle", 0)), 0),
+            **gameplay_overrides,
+            **trait_overrides,
             "discardValue": discard_value,
             "lastSalePrice": self._bounded_int(source.get("lastSalePrice", 0), 0),
             "timestamp": self._bounded_int(source.get("timestamp", int(time.time())), int(time.time()), minimum=1),
@@ -1829,9 +1951,27 @@ class LocalIdentityStore:
             payload["specialCard"] = True
             payload["cardType"] = str(player.get("cardType", source.get("cardType", "special")))
             payload["version"] = version
+
+        gameplay_source = source.get("gameplayAttributes")
+        if isinstance(gameplay_source, dict):
+            gameplay_attributes = {
+                str(field): int(value)
+                for field, value in gameplay_source.items()
+                if field is not None and value is not None
+            }
+            payload["gameplayAttributes"] = gameplay_attributes
+            payload.update(gameplay_attributes)
+        traits_source = source.get("traits")
+        if isinstance(traits_source, dict):
+            traits = {
+                str(field): int(value)
+                for field, value in traits_source.items()
+                if field is not None and value is not None
+            }
+            payload["traits"] = traits
+            payload.update(traits)
         return payload
 
-    def _v27_player_payload(self, *, item_id: int, pack: dict[str, Any], index: int) -> dict[str, Any]:
         asset_id = int(pack["squad"][index])
         initial = {
             "formation": str(pack.get("formation") or "f442"),
@@ -1850,7 +1990,6 @@ class LocalIdentityStore:
             pack=pack,
             index=index,
         )
-
     def _repair_owned_items_locked(self, connection: sqlite3.Connection, persona_id: int | None = None) -> int:
         repaired = 0
         params: tuple[Any, ...] = ()

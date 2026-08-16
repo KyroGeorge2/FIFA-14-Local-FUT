@@ -28,10 +28,19 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
 SERVER_DIRECTORY = Path(__file__).resolve().parent
+EDITOR_DIRECTORY = SERVER_DIRECTORY / "editor"
 if str(SERVER_DIRECTORY) not in sys.path:
     sys.path.insert(0, str(SERVER_DIRECTORY))
 
 from local_identity import LocalIdentityStore, PLAYER_CATALOG, PLAYER_BY_ASSET, PLAYER_REFERENCE_BY_ASSET
+from local_identity import (
+    EDITOR_PLAYER_BY_ASSET,
+    PLAYER_DATA_ERROR,
+    LocalIdentityStore,
+    PLAYER_CATALOG,
+    PLAYER_BY_ASSET,
+    PLAYER_REFERENCE_BY_ASSET,
+)
 from beta_identity import BetaIdentityStore
 
 
@@ -2137,6 +2146,34 @@ class HttpProbe(BaseHTTPRequestHandler):
         return "/2014/fut/items/web/" in lowered and lowered.endswith(".json")
 
     @staticmethod
+    def _local_editor_asset(path_without_query: str) -> tuple[Path, str] | None:
+        mapping = {
+            "/local-editor": (EDITOR_DIRECTORY / "index.html", "text/html; charset=utf-8"),
+            "/local-editor/": (EDITOR_DIRECTORY / "index.html", "text/html; charset=utf-8"),
+            "/local-editor/index.html": (EDITOR_DIRECTORY / "index.html", "text/html; charset=utf-8"),
+            "/local-editor/app.css": (EDITOR_DIRECTORY / "app.css", "text/css; charset=utf-8"),
+            "/local-editor/app.js": (EDITOR_DIRECTORY / "app.js", "application/javascript; charset=utf-8"),
+        }
+        return mapping.get(path_without_query)
+
+    @staticmethod
+    def _editor_player_summary(player: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "assetId": int(player["assetId"]),
+            "name": str(player.get("name", "")),
+            "commonName": str(player.get("commonName", player.get("name", ""))),
+            "rating": int(player.get("rating", 0)),
+            "position": str(player.get("position", "CM")),
+            "teamId": int(player.get("teamId", 0)),
+            "leagueId": int(player.get("leagueId", 0)),
+            "nation": int(player.get("nation", 0)),
+            "rareFlag": int(player.get("rareFlag", 0)),
+            "attributes": [int(value) for value in player.get("attributes", [])[:6]],
+            "gameplayAttributes": dict(player.get("gameplayAttributes", {})),
+            "traits": dict(player.get("traits", {})),
+        }
+
+    @staticmethod
     def _is_fut_static_image_path(path_without_query: str) -> bool:
         lowered = path_without_query.lower()
         return "/fut/items/images/" in lowered and lowered.endswith((".png", ".jpg", ".jpeg"))
@@ -2517,6 +2554,95 @@ class HttpProbe(BaseHTTPRequestHandler):
                 response_name="v237-returning-league-nation-locstrings-xml",
                 status=200, bytes=len(payload),
             )
+        elif probe_name == "fut-http" and path_without_query.startswith("/local-editor"):
+            editor_asset = self._local_editor_asset(path_without_query)
+            try:
+                if editor_asset is not None:
+                    asset_path, content_type = editor_asset
+                    payload = asset_path.read_bytes()
+                    status = 200
+                    response_name = "local-editor-asset"
+                elif identity_store is None:
+                    raise ValueError("local identity store is unavailable")
+                elif PLAYER_DATA_ERROR:
+                    raise ValueError(PLAYER_DATA_ERROR)
+                elif path_without_query == "/local-editor/api/players" and effective_method == "GET":
+                    query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
+                    needle = str(query.get("q", [""])[0]).strip().casefold()
+                    players = [] if len(needle) < 2 else [
+                        self._editor_player_summary(player)
+                        for player in EDITOR_PLAYER_BY_ASSET.values()
+                        if needle in str(player.get("name", "")).casefold()
+                        or needle in str(player.get("assetId", ""))
+                    ][:30]
+                    payload = build_fut_json_payload({"players": players})
+                    content_type = "application/json; charset=utf-8"
+                    status = 200
+                    response_name = "local-editor-player-search"
+                elif path_without_query == "/local-editor/api/cards" and effective_method == "GET":
+                    payload = build_fut_json_payload({"cards": identity_store.custom_card_definitions()})
+                    content_type = "application/json; charset=utf-8"
+                    status = 200
+                    response_name = "local-editor-card-list"
+                elif path_without_query == "/local-editor/api/cards/export" and effective_method == "GET":
+                    payload = build_fut_json_payload(identity_store.export_custom_cards())
+                    content_type = "application/json; charset=utf-8"
+                    status = 200
+                    response_name = "local-editor-card-export"
+                elif path_without_query == "/local-editor/api/cards/import" and effective_method == "POST":
+                    document = json.loads(body.decode("utf-8"))
+                    if not isinstance(document, dict):
+                        raise ValueError("custom card import must be a JSON object")
+                    payload = build_fut_json_payload({"cards": identity_store.import_custom_cards(document)})
+                    content_type = "application/json; charset=utf-8"
+                    status = 200
+                    response_name = "local-editor-card-import"
+                elif path_without_query == "/local-editor/api/cards" and effective_method == "POST":
+                    document = json.loads(body.decode("utf-8"))
+                    if not isinstance(document, dict) or not isinstance(document.get("card"), dict):
+                        raise ValueError("custom card save requires a card object")
+                    payload = build_fut_json_payload(identity_store.save_custom_card(
+                        document["card"], grant=bool(document.get("grant", False))
+                    ))
+                    content_type = "application/json; charset=utf-8"
+                    status = 200
+                    response_name = "local-editor-card-created"
+                else:
+                    card_match = re.fullmatch(r"/local-editor/api/cards/([^/]+)(/grant)?", path_without_query)
+                    if card_match is None:
+                        raise ValueError("unknown local editor route")
+                    card_id, grant_suffix = card_match.groups()
+                    if grant_suffix and effective_method == "POST":
+                        document = identity_store.grant_custom_card(card_id)
+                        response_name = "local-editor-card-granted"
+                    elif not grant_suffix and effective_method == "PUT":
+                        request = json.loads(body.decode("utf-8"))
+                        if not isinstance(request, dict) or not isinstance(request.get("card"), dict):
+                            raise ValueError("custom card save requires a card object")
+                        document = identity_store.save_custom_card(
+                            request["card"], card_id=card_id, grant=bool(request.get("grant", False))
+                        )
+                        response_name = "local-editor-card-updated"
+                    elif not grant_suffix and effective_method == "DELETE":
+                        if not identity_store.delete_custom_card(card_id):
+                            raise ValueError("custom card does not exist")
+                        document = {"deleted": True, "cardId": card_id}
+                        response_name = "local-editor-card-deleted"
+                    else:
+                        raise ValueError("unsupported local editor method")
+                    payload = build_fut_json_payload(document)
+                    content_type = "application/json; charset=utf-8"
+                    status = 200
+            except (UnicodeDecodeError, json.JSONDecodeError, ValueError, OSError) as error:
+                payload = build_fut_json_payload({"error": str(error)})
+                content_type = "application/json; charset=utf-8"
+                status = 400
+                response_name = "local-editor-error"
+            self.send_response(status)
+            self.send_header("content-type", content_type)
+            self.send_header("cache-control", "no-store")
+            self.send_header("connection", "close")
+            emit(response_name, listener=probe_name, method=self.command, path=self.path, status=status, bytes=len(payload))
         elif (
             probe_name in {"fut-http", "dynamic-http"}
             and self._is_fut_static_metadata_path(path_without_query)
