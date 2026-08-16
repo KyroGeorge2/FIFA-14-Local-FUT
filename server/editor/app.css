@@ -1,0 +1,50 @@
+:root {
+  --ink: #18201b;
+  --muted: #637167;
+  --paper: #f7f7ef;
+  --line: #cdd4c9;
+  --accent: #007d5a;
+  --accent-dark: #00583f;
+  --coral: #df6549;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--paper); color: var(--ink); font-family: Georgia, "Times New Roman", serif; }
+button, input, select { font: inherit; }
+.topbar { min-height: 58px; display: flex; align-items: center; justify-content: space-between; padding: 0 5vw; border-bottom: 1px solid var(--line); background: #fffef8; }
+.brand { font-weight: 700; font-size: 1.2rem; letter-spacing: 0; }
+nav { display: flex; align-self: stretch; gap: 1.25rem; align-items: center; color: var(--muted); }
+nav a, nav span { text-decoration: none; color: inherit; padding: .2rem 0; }
+nav .active { color: var(--accent-dark); border-bottom: 3px solid var(--coral); font-weight: 700; }
+main { max-width: 1180px; margin: 0 auto; padding: 2rem 5vw 3rem; }
+.picker { border-bottom: 1px solid var(--line); padding-bottom: 1.5rem; }
+label, legend { display: block; font-size: .84rem; font-weight: 700; letter-spacing: 0; }
+.search-row { display: grid; grid-template-columns: minmax(200px, 2fr) minmax(180px, 1fr); gap: .75rem; margin-top: .45rem; }
+input, select { width: 100%; min-height: 38px; padding: .4rem .5rem; border: 1px solid #9eaba0; border-radius: 3px; background: #fff; color: var(--ink); }
+input:focus, select:focus { outline: 2px solid #69b698; outline-offset: 1px; }
+.workspace { display: grid; grid-template-columns: minmax(0, 2fr) minmax(250px, 1fr); gap: 2.5rem; padding-top: 2rem; }
+.form-heading, .library-heading, .actions { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.eyebrow { margin: 0 0 .2rem; color: var(--accent-dark); font-size: .75rem; font-weight: 700; text-transform: uppercase; }
+h1, h2 { margin: 0; letter-spacing: 0; }
+h1 { font-size: 1.8rem; } h2 { font-size: 1.1rem; }
+.grant { display: flex; align-items: center; gap: .45rem; white-space: nowrap; }
+.grant input { width: auto; min-height: auto; accent-color: var(--accent); }
+.identity-grid, .stats-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .85rem; margin: 1.5rem 0; }
+fieldset { border: 1px solid var(--line); margin: 0; padding: 1rem; } legend { padding: 0 .35rem; color: var(--muted); }
+.stats-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); margin: 0; }
+.gameplay-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
+.gameplay-group { border-left: 3px solid var(--coral); padding-left: .65rem; }.gameplay-group h3 { font-size: .9rem; margin: 0 0 .55rem; }.gameplay-group .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .55rem; }
+.actions { justify-content: flex-end; margin-top: 1.25rem; }
+button { min-height: 38px; padding: .45rem .8rem; border: 1px solid var(--accent-dark); border-radius: 3px; background: transparent; color: var(--accent-dark); cursor: pointer; }
+button[type="submit"] { background: var(--accent); color: white; }
+button:hover { background: #dfece5; } button[type="submit"]:hover { background: var(--accent-dark); }
+#status { min-height: 1.3rem; margin: 1rem 0 0; color: var(--accent-dark); }
+#status.error { color: #a33020; }
+.library { border-left: 1px solid var(--line); padding-left: 1.5rem; }
+.library-heading > div { display: flex; gap: .75rem; font-size: .85rem; }
+a, .import { color: var(--accent-dark); text-decoration: underline; cursor: pointer; }
+.import input { display: none; }
+#saved-cards { padding: 0; margin: 1rem 0; list-style: none; }
+#saved-cards li { border-bottom: 1px solid var(--line); padding: .75rem 0; display: grid; grid-template-columns: 1fr auto; gap: .5rem; }
+.saved-name { display: block; font-weight: 700; }.saved-meta { color: var(--muted); font-size: .8rem; }.saved-actions { display: flex; gap: .3rem; }.saved-actions button { min-height: 28px; padding: .2rem .4rem; font-size: .75rem; }
+@media (max-width: 760px) { .topbar { padding: 0 1rem; } nav { gap: .75rem; font-size: .85rem; } main { padding: 1.25rem 1rem 2rem; }.workspace { grid-template-columns: 1fr; gap: 2rem; }.library { border-left: 0; border-top: 1px solid var(--line); padding: 1.5rem 0 0; }.identity-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }.stats-grid, .gameplay-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }.form-heading { align-items: flex-start; flex-direction: column; }.search-row { grid-template-columns: 1fr; } }

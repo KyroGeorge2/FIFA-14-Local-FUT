@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FUT Workshop</title>
+  <link rel="stylesheet" href="/local-editor/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">FUT Workshop</div>
+    <nav aria-label="Workshop sections">
+      <a class="active" href="/local-editor/">Cards</a>
+      <span>Packs</span>
+      <span>Tournaments</span>
+    </nav>
+  </header>
+  <main>
+    <section class="picker" aria-label="Base player">
+      <label for="player-search">Base player</label>
+      <div class="search-row">
+        <input id="player-search" type="search" autocomplete="off" placeholder="Search a player">
+        <select id="player-results" size="1" aria-label="Matching players"></select>
+      </div>
+    </section>
+
+    <section class="workspace">
+      <form id="card-form" class="editor" autocomplete="off">
+        <input id="card-id" type="hidden">
+        <div class="form-heading">
+          <div>
+            <p class="eyebrow">Card editor</p>
+            <h1 id="player-name">Choose a base player</h1>
+          </div>
+          <label class="grant"><input id="grant" type="checkbox" checked> Grant to My Club</label>
+        </div>
+        <input id="asset-id" type="hidden">
+        <div class="identity-grid">
+          <label>Overall<input id="rating" type="number" min="1" max="99" required></label>
+          <label>Rarity
+            <select id="rare-flag">
+              <option value="0">Common</option>
+              <option value="1">Rare</option>
+              <option value="3">In Form</option>
+              <option value="5">Team of the Year</option>
+              <option value="7">Green</option>
+              <option value="8">Man of the Match</option>
+              <option value="11">Blue</option>
+              <option value="12">Legend</option>
+            </select>
+          </label>
+          <label>Team ID<input id="team-id" type="number" min="1" required></label>
+          <label>League ID<input id="league-id" type="number" min="1" required></label>
+        </div>
+        <fieldset>
+          <legend>Face attributes</legend>
+          <div class="stats-grid">
+            <label>PAC<input data-attribute="0" type="number" min="0" max="99" required></label>
+            <label>SHO<input data-attribute="1" type="number" min="0" max="99" required></label>
+            <label>PAS<input data-attribute="2" type="number" min="0" max="99" required></label>
+            <label>DRI<input data-attribute="3" type="number" min="0" max="99" required></label>
+            <label>DEF<input data-attribute="4" type="number" min="0" max="99" required></label>
+            <label>PHY<input data-attribute="5" type="number" min="0" max="99" required></label>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Gameplay attributes</legend>
+          <div id="gameplay-fields" class="gameplay-fields"></div>
+        </fieldset>
+        <fieldset>
+          <legend>Traits</legend>
+          <div class="identity-grid">
+            <label>Weak foot<select id="weakfootabilitytypecode"><option value="1">1 star</option><option value="2">2 stars</option><option value="3">3 stars</option><option value="4">4 stars</option><option value="5">5 stars</option></select></label>
+            <label>Skill moves<select id="skillmoves"><option value="0">0 stars</option><option value="1">1 star</option><option value="2">2 stars</option><option value="3">3 stars</option><option value="4">4 stars</option></select></label>
+            <label>Preferred foot<select id="preferredfoot"><option value="1">Left</option><option value="2">Right</option></select></label>
+            <label>Attacking work rate<select id="attackingworkrate"><option value="0">Low</option><option value="1">Medium</option><option value="2">High</option></select></label>
+            <label>Defensive work rate<select id="defensiveworkrate"><option value="0">Low</option><option value="1">Medium</option><option value="2">High</option></select></label>
+          </div>
+        </fieldset>
+        <div class="actions">
+          <button id="reset" type="button">Reset values</button>
+          <button id="save" type="submit">Save card</button>
+        </div>
+        <p id="status" role="status"></p>
+      </form>
+
+      <aside class="library">
+        <div class="library-heading">
+          <h2>Saved cards</h2>
+          <div>
+            <a id="export" href="/local-editor/api/cards/export">Export</a>
+            <label class="import">Import<input id="import" type="file" accept="application/json"></label>
+          </div>
+        </div>
+        <ol id="saved-cards"></ol>
+      </aside>
+    </section>
+  </main>
+  <script src="/local-editor/app.js"></script>
+</body>
+</html>
